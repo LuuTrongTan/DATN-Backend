@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { AuthRequest } from '../../middlewares/auth.middleware';
+import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 
 // UC-18, UC-19, UC-20: Quản lý danh mục

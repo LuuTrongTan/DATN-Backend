@@ -1,7 +1,7 @@
 import { Response } from 'express';
-import { AuthRequest } from '../../middlewares/auth.middleware';
+import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
-import { cartItemSchema } from '../../utils/validation';
+import { cartItemSchema } from './cart.validation';
 
 // UC-08: Thêm sản phẩm vào giỏ hàng
 export const addToCart = async (req: AuthRequest, res: Response) => {

@@ -1,7 +1,7 @@
 import { Response } from 'express';
-import { AuthRequest } from '../../middlewares/auth.middleware';
+import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
-import { productSchema } from '../../utils/validation';
+import { productSchema } from './products.validation';
 
 // UC-07: Tìm kiếm và lọc sản phẩm
 export const searchProducts = async (req: AuthRequest, res: Response) => {

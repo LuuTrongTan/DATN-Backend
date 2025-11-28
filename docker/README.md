@@ -46,3 +46,5 @@ docker build -f Dockerfile -t ecommerce-backend ..
 - File `.env` cần được tạo ở thư mục `Backend/`
 - Migrations sẽ tự động chạy khi container start
 
+
+

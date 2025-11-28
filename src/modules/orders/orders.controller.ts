@@ -1,7 +1,7 @@
 import { Response } from 'express';
-import { AuthRequest } from '../../middlewares/auth.middleware';
+import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
-import { orderSchema } from '../../utils/validation';
+import { orderSchema } from './orders.validation';
 
 // UC-12: Đặt hàng
 export const createOrder = async (req: AuthRequest, res: Response) => {

@@ -2,8 +2,16 @@ import { Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { pool } from '../../connections';
-import { AuthRequest } from '../../middlewares/auth.middleware';
-import { registerSchema, loginSchema } from '../../utils/validation';
+import { AuthRequest } from '../../types/request.types';
+import {
+  registerSchema,
+  loginSchema,
+  resetPasswordSchema,
+  updateProfileSchema,
+  verifyPasswordSchema,
+  refreshTokenSchema,
+  deleteAccountSchema,
+} from './auth.validation';
 import {
   generateCode,
   saveVerificationCode,
@@ -12,6 +20,9 @@ import {
   verifyCode,
 } from '../../utils/verification';
 import { appConfig } from '../../connections/config/app.config';
+import { ResponseHandler } from '../../utils/response';
+import { logger, auditLog } from '../../utils/logging';
+import { LoginResponse, AuthResponse, RefreshTokenResponse } from '../../types/response.types';
 
 // UC-01: Đăng ký
 export const register = async (req: AuthRequest, res: Response) => {
@@ -26,10 +37,12 @@ export const register = async (req: AuthRequest, res: Response) => {
     );
 
     if (existingUser.rows.length > 0) {
-      return res.status(400).json({
-        message: 'Email hoặc số điện thoại đã được đăng ký',
-        suggestion: 'Vui lòng đăng nhập hoặc sử dụng email/số điện thoại khác',
-      });
+      logger.warn('[Register] User already exists', { email, phone, ip: req.ip });
+      return ResponseHandler.conflict(
+        res,
+        'Email hoặc số điện thoại đã được đăng ký',
+        { suggestion: 'Vui lòng đăng nhập hoặc sử dụng email/số điện thoại khác' }
+      );
     }
 
     // Hash password
@@ -57,18 +70,25 @@ export const register = async (req: AuthRequest, res: Response) => {
       await sendOTP(phone, code);
     }
 
-    res.status(201).json({
-      message: 'Đăng ký thành công. Vui lòng xác thực tài khoản.',
+    auditLog('USER_REGISTERED', {
       userId: user.id,
+      email,
+      phone,
+      ip: req.ip,
     });
+
+    logger.info('[Register] User registered successfully', { userId: user.id, email, phone });
+
+    return ResponseHandler.created(
+      res,
+      { userId: user.id, email: user.email, phone: user.phone },
+      'Đăng ký thành công. Vui lòng xác thực tài khoản.'
+    );
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return res.status(400).json({
-        message: 'Dữ liệu không hợp lệ',
-        errors: error.errors,
-      });
+      return ResponseHandler.validationError(res, error.errors);
     }
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, 'Lỗi khi đăng ký', error);
   }
 };
 
@@ -78,7 +98,7 @@ export const resendVerification = async (req: AuthRequest, res: Response) => {
     const { email, phone } = req.body;
 
     if (!email && !phone) {
-      return res.status(400).json({ message: 'Phải cung cấp email hoặc số điện thoại' });
+      return ResponseHandler.error(res, 'Phải cung cấp email hoặc số điện thoại', 400);
     }
 
     const result = await pool.query(
@@ -87,13 +107,14 @@ export const resendVerification = async (req: AuthRequest, res: Response) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Tài khoản không tồn tại' });
+      logger.warn('[ResendVerification] User not found', { email, phone, ip: req.ip });
+      return ResponseHandler.notFound(res, 'Tài khoản không tồn tại');
     }
 
     const user = result.rows[0];
 
     if (user.is_verified) {
-      return res.status(400).json({ message: 'Tài khoản đã được xác thực' });
+      return ResponseHandler.error(res, 'Tài khoản đã được xác thực', 400);
     }
 
     // Check rate limit (1 minute cooldown)
@@ -110,9 +131,11 @@ export const resendVerification = async (req: AuthRequest, res: Response) => {
       const diffMinutes = (now.getTime() - lastSent.getTime()) / 1000 / 60;
 
       if (diffMinutes < 1) {
-        return res.status(429).json({
-          message: 'Vui lòng đợi 1 phút trước khi yêu cầu lại mã xác nhận',
-        });
+        return ResponseHandler.tooManyRequests(
+          res,
+          'Vui lòng đợi 1 phút trước khi yêu cầu lại mã xác nhận',
+          60
+        );
       }
     }
 
@@ -128,9 +151,11 @@ export const resendVerification = async (req: AuthRequest, res: Response) => {
       await sendOTP(phone, code);
     }
 
-    res.json({ message: 'Đã gửi lại mã xác nhận thành công' });
+    logger.info('[ResendVerification] Code sent successfully', { userId: user.id, email, phone });
+
+    return ResponseHandler.success(res, null, 'Đã gửi lại mã xác nhận thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, 'Lỗi khi gửi lại mã xác nhận', error);
   }
 };
 
@@ -140,11 +165,11 @@ export const verify = async (req: AuthRequest, res: Response) => {
     const { code, email, phone } = req.body;
 
     if (!code) {
-      return res.status(400).json({ message: 'Mã xác thực không được để trống' });
+      return ResponseHandler.error(res, 'Mã xác thực không được để trống', 400);
     }
 
     if (!email && !phone) {
-      return res.status(400).json({ message: 'Phải cung cấp email hoặc số điện thoại' });
+      return ResponseHandler.error(res, 'Phải cung cấp email hoặc số điện thoại', 400);
     }
 
     const userResult = await pool.query(
@@ -153,7 +178,8 @@ export const verify = async (req: AuthRequest, res: Response) => {
     );
 
     if (userResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Tài khoản không tồn tại' });
+      logger.warn('[Verify] User not found', { email, phone, ip: req.ip });
+      return ResponseHandler.notFound(res, 'Tài khoản không tồn tại');
     }
 
     const userId = userResult.rows[0].id;
@@ -162,18 +188,30 @@ export const verify = async (req: AuthRequest, res: Response) => {
     const isValid = await verifyCode(userId, code, verificationType);
 
     if (!isValid) {
-      return res.status(400).json({
-        message: 'Mã xác thực không đúng hoặc đã hết hạn',
-        suggestion: 'Vui lòng yêu cầu gửi lại mã xác thực',
-      });
+      logger.warn('[Verify] Invalid code', { userId, email, phone, ip: req.ip });
+      return ResponseHandler.error(
+        res,
+        'Mã xác thực không đúng hoặc đã hết hạn',
+        400,
+        { code: 'INVALID_CODE', details: { suggestion: 'Vui lòng yêu cầu gửi lại mã xác thực' } }
+      );
     }
 
     // Update user as verified
     await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [userId]);
 
-    res.json({ message: 'Xác thực thành công' });
+    auditLog('USER_VERIFIED', {
+      userId,
+      email,
+      phone,
+      ip: req.ip,
+    });
+
+    logger.info('[Verify] Account verified successfully', { userId, email, phone });
+
+    return ResponseHandler.success(res, null, 'Xác thực thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, 'Lỗi khi xác thực', error);
   }
 };
 
@@ -183,7 +221,7 @@ export const forgotPassword = async (req: AuthRequest, res: Response) => {
     const { email, phone } = req.body;
 
     if (!email && !phone) {
-      return res.status(400).json({ message: 'Phải cung cấp email hoặc số điện thoại' });
+      return ResponseHandler.error(res, 'Phải cung cấp email hoặc số điện thoại', 400);
     }
 
     const result = await pool.query(
@@ -192,7 +230,9 @@ export const forgotPassword = async (req: AuthRequest, res: Response) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Tài khoản không tồn tại' });
+      // Don't reveal that user doesn't exist for security
+      logger.warn('[ForgotPassword] User not found', { email, phone, ip: req.ip });
+      return ResponseHandler.success(res, null, 'Đã gửi mã đặt lại mật khẩu thành công');
     }
 
     const user = result.rows[0];
@@ -207,9 +247,18 @@ export const forgotPassword = async (req: AuthRequest, res: Response) => {
       await sendOTP(phone, code);
     }
 
-    res.json({ message: 'Đã gửi mã đặt lại mật khẩu thành công' });
+    auditLog('PASSWORD_RESET_REQUESTED', {
+      userId: user.id,
+      email,
+      phone,
+      ip: req.ip,
+    });
+
+    logger.info('[ForgotPassword] Reset code sent successfully', { userId: user.id, email, phone });
+
+    return ResponseHandler.success(res, null, 'Đã gửi mã đặt lại mật khẩu thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, 'Lỗi khi gửi mã đặt lại mật khẩu', error);
   }
 };
 
@@ -227,54 +276,77 @@ export const login = async (req: AuthRequest, res: Response) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ message: 'Thông tin đăng nhập không đúng' });
+      logger.warn('[Login] User not found', { email, phone, ip: req.ip });
+      return ResponseHandler.unauthorized(res, 'Thông tin đăng nhập không đúng');
     }
 
     const user = result.rows[0];
 
     if (!user.is_verified) {
-      return res.status(403).json({
-        message: 'Tài khoản chưa được xác thực',
-        suggestion: 'Vui lòng xác thực tài khoản trước khi đăng nhập',
-      });
+      logger.warn('[Login] Account not verified', { userId: user.id, ip: req.ip });
+      return ResponseHandler.forbidden(
+        res,
+        'Tài khoản chưa được xác thực',
+        {
+          code: 'ACCOUNT_NOT_VERIFIED',
+          details: { suggestion: 'Vui lòng xác thực tài khoản trước khi đăng nhập' },
+        }
+      );
     }
 
     if (!user.is_active || user.is_banned) {
-      return res.status(403).json({ message: 'Tài khoản đã bị khóa' });
+      logger.warn('[Login] Account banned or inactive', { userId: user.id, ip: req.ip });
+      return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
     }
 
     // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
 
     if (!isValidPassword) {
-      return res.status(401).json({ message: 'Thông tin đăng nhập không đúng' });
+      logger.warn('[Login] Invalid password', { userId: user.id, ip: req.ip });
+      return ResponseHandler.unauthorized(res, 'Thông tin đăng nhập không đúng');
     }
 
-    // Generate JWT token
+    // Generate JWT access token
     const token = jwt.sign(
       { userId: user.id, role: user.role },
       appConfig.jwtSecret,
       { expiresIn: appConfig.jwtExpiresIn }
     );
 
-    res.json({
-      message: 'Đăng nhập thành công',
+    // Generate refresh token (longer expiry, e.g., 30 days)
+    const refreshToken = jwt.sign(
+      { userId: user.id, role: user.role, type: 'refresh' },
+      appConfig.jwtSecret,
+      { expiresIn: '30d' }
+    );
+
+    auditLog('USER_LOGIN', {
+      userId: user.id,
+      email: user.email,
+      phone: user.phone,
+      ip: req.ip,
+    });
+
+    logger.info('[Login] User logged in successfully', { userId: user.id, email: user.email, phone: user.phone });
+
+    const responseData: LoginResponse = {
       token,
+      refreshToken,
       user: {
         id: user.id,
         email: user.email,
         phone: user.phone,
         role: user.role,
       },
-    });
+    };
+
+    return ResponseHandler.success(res, responseData, 'Đăng nhập thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return res.status(400).json({
-        message: 'Dữ liệu không hợp lệ',
-        errors: error.errors,
-      });
+      return ResponseHandler.validationError(res, error.errors);
     }
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, 'Lỗi khi đăng nhập', error);
   }
 };
 
@@ -284,21 +356,23 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
     const { oldPassword, newPassword, confirmPassword } = req.body;
 
     if (!oldPassword || !newPassword || !confirmPassword) {
-      return res.status(400).json({ message: 'Vui lòng điền đầy đủ thông tin' });
+      return ResponseHandler.error(res, 'Vui lòng điền đầy đủ thông tin', 400);
     }
 
     if (newPassword.length < 8) {
-      return res.status(400).json({ message: 'Mật khẩu mới phải có ít nhất 8 ký tự' });
+      return ResponseHandler.error(res, 'Mật khẩu mới phải có ít nhất 8 ký tự', 400);
     }
 
     if (newPassword !== confirmPassword) {
-      return res.status(400).json({ message: 'Xác nhận mật khẩu không khớp' });
+      return ResponseHandler.error(res, 'Xác nhận mật khẩu không khớp', 400);
     }
+
+    const userId = req.user!.id;
 
     // Get current user password
     const result = await pool.query(
       'SELECT password_hash FROM users WHERE id = $1',
-      [req.user!.id]
+      [userId]
     );
 
     const user = result.rows[0];
@@ -307,19 +381,27 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
     const isValidPassword = await bcrypt.compare(oldPassword, user.password_hash);
 
     if (!isValidPassword) {
-      return res.status(400).json({ message: 'Mật khẩu cũ không đúng' });
+      logger.warn('[ChangePassword] Invalid old password', { userId, ip: req.ip });
+      return ResponseHandler.error(res, 'Mật khẩu cũ không đúng', 400);
     }
 
     // Update password
     const newPasswordHash = await bcrypt.hash(newPassword, 10);
     await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [
       newPasswordHash,
-      req.user!.id,
+      userId,
     ]);
 
-    res.json({ message: 'Đổi mật khẩu thành công' });
+    auditLog('PASSWORD_CHANGED', {
+      userId,
+      ip: req.ip,
+    });
+
+    logger.info('[ChangePassword] Password changed successfully', { userId });
+
+    return ResponseHandler.success(res, null, 'Đổi mật khẩu thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, 'Lỗi khi đổi mật khẩu', error);
   }
 };
 
@@ -331,9 +413,381 @@ export const getCurrentUser = async (req: AuthRequest, res: Response) => {
       [req.user!.id]
     );
 
-    res.json({ user: result.rows[0] });
+    if (result.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Người dùng không tồn tại');
+    }
+
+    const responseData: AuthResponse = {
+      user: result.rows[0],
+    };
+
+    return ResponseHandler.success(res, responseData, 'Lấy thông tin user thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin user', error);
+  }
+};
+
+// Reset Password (sau khi có code từ forgot-password)
+export const resetPassword = async (req: AuthRequest, res: Response) => {
+  try {
+    const validated = resetPasswordSchema.parse(req.body);
+    const { code, email, phone, newPassword } = validated;
+
+    // Find user
+    const userResult = await pool.query(
+      'SELECT id FROM users WHERE email = $1 OR phone = $2',
+      [email, phone]
+    );
+
+    if (userResult.rows.length === 0) {
+      logger.warn('[ResetPassword] User not found', { email, phone, ip: req.ip });
+      return ResponseHandler.notFound(res, 'Tài khoản không tồn tại');
+    }
+
+    const userId = userResult.rows[0].id;
+
+    // Verify reset code
+    const isValid = await verifyCode(userId, code, 'password_reset');
+
+    if (!isValid) {
+      logger.warn('[ResetPassword] Invalid code', { userId, email, phone, ip: req.ip });
+      return ResponseHandler.error(
+        res,
+        'Mã xác thực không đúng hoặc đã hết hạn',
+        400,
+        { code: 'INVALID_CODE', details: { suggestion: 'Vui lòng yêu cầu gửi lại mã đặt lại mật khẩu' } }
+      );
+    }
+
+    // Hash new password
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [
+      passwordHash,
+      userId,
+    ]);
+
+    auditLog('PASSWORD_RESET', {
+      userId,
+      email,
+      phone,
+      ip: req.ip,
+    });
+
+    logger.info('[ResetPassword] Password reset successfully', { userId, email, phone });
+
+    return ResponseHandler.success(res, null, 'Đặt lại mật khẩu thành công');
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return ResponseHandler.validationError(res, error.errors);
+    }
+    return ResponseHandler.internalError(res, 'Lỗi khi đặt lại mật khẩu', error);
+  }
+};
+
+// Logout
+export const logout = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+
+    // Với JWT stateless, logout chủ yếu là client-side (xóa token)
+    // Nếu cần server-side logout, có thể thêm blacklist token vào database
+    // Hoặc sử dụng Redis để lưu blacklist tokens
+    
+    // TODO: Có thể thêm logic blacklist token nếu cần
+    // const token = req.headers.authorization?.split(' ')[1];
+    // await addTokenToBlacklist(token);
+
+    auditLog('USER_LOGOUT', {
+      userId,
+      ip: req.ip,
+    });
+
+    logger.info('[Logout] User logged out', { userId });
+
+    return ResponseHandler.success(res, null, 'Đăng xuất thành công');
+  } catch (error: any) {
+    return ResponseHandler.internalError(res, 'Lỗi khi đăng xuất', error);
+  }
+};
+
+// Update Profile
+export const updateProfile = async (req: AuthRequest, res: Response) => {
+  try {
+    const validated = updateProfileSchema.parse(req.body);
+    const { full_name, email, phone } = validated;
+    const userId = req.user!.id;
+
+    // Check if email or phone is already taken by another user
+    if (email || phone) {
+      const existingUser = await pool.query(
+        'SELECT id FROM users WHERE (email = $1 OR phone = $2) AND id != $3',
+        [email || null, phone || null, userId]
+      );
+
+      if (existingUser.rows.length > 0) {
+        logger.warn('[UpdateProfile] Email or phone already taken', { userId, email, phone });
+        return ResponseHandler.conflict(
+          res,
+          'Email hoặc số điện thoại đã được sử dụng bởi tài khoản khác'
+        );
+      }
+    }
+
+    // Build update query dynamically
+    const updateFields: string[] = [];
+    const values: any[] = [];
+    let paramCount = 0;
+
+    if (full_name !== undefined) {
+      paramCount++;
+      updateFields.push(`full_name = $${paramCount}`);
+      values.push(full_name);
+    }
+
+    if (email !== undefined) {
+      paramCount++;
+      updateFields.push(`email = $${paramCount}`);
+      values.push(email);
+    }
+
+    if (phone !== undefined) {
+      paramCount++;
+      updateFields.push(`phone = $${paramCount}`);
+      values.push(phone);
+    }
+
+    if (updateFields.length === 0) {
+      return ResponseHandler.error(res, 'Không có trường nào để cập nhật', 400);
+    }
+
+    paramCount++;
+    updateFields.push(`updated_at = NOW()`);
+    paramCount++;
+    values.push(userId);
+
+    const result = await pool.query(
+      `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${paramCount} RETURNING id, email, phone, full_name, role`,
+      values
+    );
+
+    auditLog('PROFILE_UPDATED', {
+      userId,
+      updates: { full_name, email, phone },
+      ip: req.ip,
+    });
+
+    logger.info('[UpdateProfile] Profile updated successfully', { userId, updates: { full_name, email, phone } });
+
+    const responseData: AuthResponse = {
+      user: result.rows[0],
+    };
+
+    return ResponseHandler.success(res, responseData, 'Cập nhật thông tin thành công');
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return ResponseHandler.validationError(res, error.errors);
+    }
+    return ResponseHandler.internalError(res, 'Lỗi khi cập nhật thông tin', error);
+  }
+};
+
+// Verify Password (re-authenticate cho các thao tác nhạy cảm)
+export const verifyPassword = async (req: AuthRequest, res: Response) => {
+  try {
+    const validated = verifyPasswordSchema.parse(req.body);
+    const { password } = validated;
+    const userId = req.user!.id;
+
+    // Get user password
+    const result = await pool.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Người dùng không tồn tại');
+    }
+
+    const user = result.rows[0];
+
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+
+    if (!isValidPassword) {
+      logger.warn('[VerifyPassword] Invalid password', { userId, ip: req.ip });
+      return ResponseHandler.unauthorized(res, 'Mật khẩu không đúng');
+    }
+
+    logger.info('[VerifyPassword] Password verified successfully', { userId });
+
+    return ResponseHandler.success(res, { verified: true }, 'Xác thực mật khẩu thành công');
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return ResponseHandler.validationError(res, error.errors);
+    }
+    return ResponseHandler.internalError(res, 'Lỗi khi xác thực mật khẩu', error);
+  }
+};
+
+// Refresh Token
+export const refreshToken = async (req: AuthRequest, res: Response) => {
+  try {
+    const validated = refreshTokenSchema.parse(req.body);
+    const { refreshToken } = validated;
+
+    // Verify refresh token
+    try {
+      const decoded = jwt.verify(refreshToken, appConfig.jwtSecret) as any;
+      
+      // Verify this is a refresh token (has type: 'refresh')
+      if (decoded.type !== 'refresh') {
+        logger.warn('[RefreshToken] Invalid token type', { ip: req.ip });
+        return ResponseHandler.unauthorized(res, 'Token không phải là refresh token');
+      }
+      
+      // Verify user still exists and is active
+      const result = await pool.query(
+        'SELECT id, email, phone, role, is_active, is_banned FROM users WHERE id = $1',
+        [decoded.userId]
+      );
+
+      if (result.rows.length === 0) {
+        return ResponseHandler.unauthorized(res, 'Người dùng không tồn tại');
+      }
+
+      const user = result.rows[0];
+
+      if (!user.is_active || user.is_banned) {
+        logger.warn('[RefreshToken] Account banned or inactive', { userId: user.id });
+        return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
+      }
+
+      // Generate new access token
+      const newToken = jwt.sign(
+        { userId: user.id, role: user.role },
+        appConfig.jwtSecret,
+        { expiresIn: appConfig.jwtExpiresIn }
+      );
+
+      // Generate new refresh token
+      const newRefreshToken = jwt.sign(
+        { userId: user.id, role: user.role, type: 'refresh' },
+        appConfig.jwtSecret,
+        { expiresIn: '30d' }
+      );
+
+      logger.info('[RefreshToken] Token refreshed successfully', { userId: user.id });
+
+      const responseData: RefreshTokenResponse = {
+        token: newToken,
+        refreshToken: newRefreshToken,
+      };
+
+      return ResponseHandler.success(res, responseData, 'Làm mới token thành công');
+    } catch (jwtError) {
+      logger.warn('[RefreshToken] Invalid or expired token', { ip: req.ip });
+      return ResponseHandler.unauthorized(res, 'Refresh token không hợp lệ hoặc đã hết hạn');
+    }
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return ResponseHandler.validationError(res, error.errors);
+    }
+    return ResponseHandler.internalError(res, 'Lỗi khi làm mới token', error);
+  }
+};
+
+// Deactivate Account (Vô hiệu hóa tài khoản)
+export const deactivateAccount = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+
+    // Check if account is already deactivated
+    const userCheck = await pool.query(
+      'SELECT is_active FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userCheck.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Người dùng không tồn tại');
+    }
+
+    if (!userCheck.rows[0].is_active) {
+      return ResponseHandler.error(res, 'Tài khoản đã bị vô hiệu hóa', 400);
+    }
+
+    // Soft delete: Set is_active to false
+    await pool.query(
+      'UPDATE users SET is_active = FALSE, updated_at = NOW() WHERE id = $1',
+      [userId]
+    );
+
+    auditLog('ACCOUNT_DEACTIVATED', {
+      userId,
+      ip: req.ip,
+    });
+
+    logger.info('[DeactivateAccount] Account deactivated successfully', { userId });
+
+    return ResponseHandler.success(res, null, 'Vô hiệu hóa tài khoản thành công');
+  } catch (error: any) {
+    return ResponseHandler.internalError(res, 'Lỗi khi vô hiệu hóa tài khoản', error);
+  }
+};
+
+// Delete Account (Xóa tài khoản - cần verify password)
+export const deleteAccount = async (req: AuthRequest, res: Response) => {
+  try {
+    const validated = deleteAccountSchema.parse(req.body);
+    const { password } = validated;
+    const userId = req.user!.id;
+
+    // Verify password
+    const result = await pool.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Người dùng không tồn tại');
+    }
+
+    const user = result.rows[0];
+
+    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+
+    if (!isValidPassword) {
+      logger.warn('[DeleteAccount] Invalid password', { userId, ip: req.ip });
+      return ResponseHandler.unauthorized(res, 'Mật khẩu không đúng');
+    }
+
+    // Soft delete: Set is_active to false and mark as deleted
+    // Hoặc hard delete nếu muốn (DELETE FROM users)
+    // Ở đây dùng soft delete để giữ lại dữ liệu lịch sử
+    await pool.query(
+      `UPDATE users 
+       SET is_active = FALSE, is_banned = TRUE, 
+       email = CONCAT(email, '_deleted_', EXTRACT(EPOCH FROM NOW())),
+       phone = NULL,
+       updated_at = NOW()
+       WHERE id = $1`,
+      [userId]
+    );
+
+    auditLog('ACCOUNT_DELETED', {
+      userId,
+      ip: req.ip,
+    });
+
+    logger.warn('[DeleteAccount] Account deleted successfully', { userId });
+
+    return ResponseHandler.success(res, null, 'Xóa tài khoản thành công');
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return ResponseHandler.validationError(res, error.errors);
+    }
+    return ResponseHandler.internalError(res, 'Lỗi khi xóa tài khoản', error);
   }
 };
 

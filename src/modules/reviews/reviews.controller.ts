@@ -1,7 +1,7 @@
 import { Response } from 'express';
-import { AuthRequest } from '../../middlewares/auth.middleware';
+import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
-import { reviewSchema } from '../../utils/validation';
+import { reviewSchema } from './reviews.validation';
 
 // UC-14: Đánh giá sản phẩm
 export const createReview = async (req: AuthRequest, res: Response) => {
