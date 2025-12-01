@@ -14,8 +14,10 @@ COPY . .
 # Build TypeScript
 RUN npm run build
 
-# Expose port
-EXPOSE 3000
+# Expose port (sử dụng biến môi trường PORT, mặc định 3000)
+ARG PORT=3000
+ENV PORT=${PORT}
+EXPOSE ${PORT}
 
 # Run migrations and start server
 CMD sh -c "npm run migrate && npm start"
