@@ -1,24 +1,27 @@
-FROM node:20-alpine
+FROM node:18-alpine
 
-WORKDIR /app
+WORKDIR /usr/src/app
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Cài tất cả dependencies và devDependencies
 RUN npm install
 
-# Copy source code
+# Cài typescript CLI
+RUN npm install -g typescript
+
+# Copy toàn bộ source code vào container
 COPY . .
+
+RUN rm -rf dist
 
 # Build TypeScript
 RUN npm run build
 
-# Expose port (sử dụng biến môi trường PORT, mặc định 3000)
-ARG PORT=3000
-ENV PORT=${PORT}
-EXPOSE ${PORT}
+RUN find dist -type d | sort
 
-# Run migrations and start server
-CMD sh -c "npm run migrate && npm start"
+# Expose port (default 3000, can be overridden via APP_PORT env var)
+EXPOSE 3000
 
+CMD ["npm", "start"]

@@ -68,7 +68,7 @@ class LoggingConfig {
         // Bỏ qua các file node_modules và winston internal
         if (file && !file.includes('node_modules') && !file.includes('winston')) {
           callerfile = file;
-          callerline = line;
+          callerline = line ?? undefined;
           callerfunction = func || 'anonymous';
           break;
         }
@@ -86,7 +86,8 @@ class LoggingConfig {
     return winston.format.combine(
       winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSSSSS' }),
       winston.format.colorize({ all: true }),
-      winston.format.printf(({ timestamp, level, message, stack, ...meta }) => {
+      winston.format.printf((info: any) => {
+        const { timestamp, level, message, stack, ...meta } = info;
         const callerInfo = this.getCallerInfo();
         const location = callerInfo.file && callerInfo.line 
           ? ` | ${callerInfo.file}:${callerInfo.line}${callerInfo.function ? ` (${callerInfo.function})` : ''}`
@@ -103,7 +104,8 @@ class LoggingConfig {
     return winston.format.combine(
       winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSSSSS' }),
       winston.format.errors({ stack: true }),
-      winston.format.printf(({ timestamp, level, message, stack, ...meta }) => {
+      winston.format.printf((info: any) => {
+        const { timestamp, level, message, stack, ...meta } = info;
         const callerInfo = this.getCallerInfo();
         const location = callerInfo.file && callerInfo.line 
           ? ` | ${callerInfo.file}:${callerInfo.line}${callerInfo.function ? ` (${callerInfo.function})` : ''}`

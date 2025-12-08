@@ -7,6 +7,8 @@ import { productSchema } from './products.validation';
 export const searchProducts = async (req: AuthRequest, res: Response) => {
   try {
     const { q, category_id, min_price, max_price, page = 1, limit = 20 } = req.query;
+    const pageNum = parseInt(page as string) || 1;
+    const limitNum = parseInt(limit as string) || 20;
 
     let query = 'SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = TRUE';
     const params: any[] = [];
@@ -44,13 +46,47 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
     // Add pagination
     paramCount++;
     query += ` ORDER BY p.created_at DESC LIMIT $${paramCount}`;
-    params.push(limit);
+    params.push(limitNum);
 
     paramCount++;
     query += ` OFFSET $${paramCount}`;
-    params.push((page - 1) * limit);
+    params.push((pageNum - 1) * limitNum);
 
     const result = await pool.query(query, params);
+
+    res.json({
+      products: result.rows,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get all products
+export const getProducts = async (req: AuthRequest, res: Response) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const pageNum = parseInt(page as string) || 1;
+    const limitNum = parseInt(limit as string) || 20;
+
+    const result = await pool.query(
+      `SELECT p.*, c.name as category_name
+       FROM products p
+       LEFT JOIN categories c ON p.category_id = c.id
+       WHERE p.is_active = TRUE
+       ORDER BY p.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limitNum, (pageNum - 1) * limitNum]
+    );
+
+    const countResult = await pool.query('SELECT COUNT(*) FROM products WHERE is_active = TRUE');
+    const total = parseInt(countResult.rows[0].count);
 
     res.json({
       products: result.rows,
@@ -66,32 +102,36 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Get all products
-export const getProducts = async (req: AuthRequest, res: Response) => {
+// Get all categories (public)
+export const getCategories = async (req: AuthRequest, res: Response) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
-
     const result = await pool.query(
-      `SELECT p.*, c.name as category_name
-       FROM products p
-       LEFT JOIN categories c ON p.category_id = c.id
-       WHERE p.is_active = TRUE
-       ORDER BY p.created_at DESC
-       LIMIT $1 OFFSET $2`,
-      [limit, (page - 1) * limit]
+      'SELECT * FROM categories WHERE is_active = TRUE ORDER BY name ASC'
     );
 
-    const countResult = await pool.query('SELECT COUNT(*) FROM products WHERE is_active = TRUE');
-    const total = parseInt(countResult.rows[0].count);
+    res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get category by ID (public)
+export const getCategoryById = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query('SELECT * FROM categories WHERE id = $1', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Danh mục không tồn tại' });
+    }
 
     res.json({
-      products: result.rows,
-      pagination: {
-        page: parseInt(page as string),
-        limit: parseInt(limit as string),
-        total,
-        totalPages: Math.ceil(total / parseInt(limit as string)),
-      },
+      success: true,
+      data: result.rows[0],
     });
   } catch (error: any) {
     res.status(500).json({ message: error.message });
@@ -131,30 +171,90 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
 // UC-15: Thêm sản phẩm
 export const createProduct = async (req: AuthRequest, res: Response) => {
   try {
-    const validated = productSchema.parse(req.body);
-
+    // Parse form data
+    const body = req.body;
+    const category_id = parseInt(body.category_id);
+    const name = body.name;
+    const description = body.description || null;
+    const price = parseFloat(body.price);
+    const stock_quantity = parseInt(body.stock_quantity);
+    
+    // Get image URLs from form (if provided as URLs)
+    const imageUrls: string[] = Array.isArray(body.image_urls) 
+      ? body.image_urls 
+      : body.image_urls 
+        ? [body.image_urls] 
+        : [];
+    
+    // Get video URL from form (if provided as URL)
+    let videoUrl = body.video_url || null;
+    
+    // Handle file uploads
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+    
+    // Upload image files theo storage config
+    if (files?.image_files && files.image_files.length > 0) {
+      const { uploadMultipleFiles } = await import('../upload/storage.service');
+      
+      const imageFiles = files.image_files.map(file => ({
+        buffer: file.buffer,
+        fileName: file.originalname,
+        mimeType: file.mimetype,
+      }));
+      
+      // Upload theo config (cloudflare, local, hoặc both)
+      const uploadResult = await uploadMultipleFiles(imageFiles);
+      imageUrls.push(...uploadResult.urls);
+    }
+    
+    // Upload video file theo storage config
+    if (files?.video_file && files.video_file.length > 0) {
+      const { uploadFile } = await import('../upload/storage.service');
+      
+      const videoFile = files.video_file[0];
+      
+      // Upload theo config (cloudflare, local, hoặc both)
+      const uploadResult = await uploadFile(
+        videoFile.buffer,
+        videoFile.originalname,
+        videoFile.mimetype
+      );
+      
+      videoUrl = uploadResult.url;
+    }
+    
+    // Validate required fields
+    if (!category_id || !name || price === undefined || stock_quantity === undefined) {
+      return res.status(400).json({ message: 'Thiếu thông tin bắt buộc' });
+    }
+    
+    if (imageUrls.length === 0) {
+      return res.status(400).json({ message: 'Phải có ít nhất 1 hình ảnh' });
+    }
+    
     // Check if category exists
     const categoryCheck = await pool.query(
       'SELECT id FROM categories WHERE id = $1',
-      [validated.category_id]
+      [category_id]
     );
 
     if (categoryCheck.rows.length === 0) {
       return res.status(400).json({ message: 'Danh mục không tồn tại' });
     }
 
+    // Insert product into database
     const result = await pool.query(
       `INSERT INTO products (category_id, name, description, price, stock_quantity, image_urls, video_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [
-        validated.category_id,
-        validated.name,
-        validated.description || null,
-        validated.price,
-        validated.stock_quantity,
-        validated.image_urls,
-        validated.video_url || null,
+        category_id,
+        name,
+        description,
+        price,
+        stock_quantity,
+        imageUrls,
+        videoUrl,
       ]
     );
 
@@ -163,13 +263,8 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
       product: result.rows[0],
     });
   } catch (error: any) {
-    if (error.name === 'ZodError') {
-      return res.status(400).json({
-        message: 'Dữ liệu không hợp lệ',
-        errors: error.errors,
-      });
-    }
-    res.status(500).json({ message: error.message });
+    console.error('Create product error:', error);
+    res.status(500).json({ message: error.message || 'Có lỗi xảy ra khi tạo sản phẩm' });
   }
 };
 

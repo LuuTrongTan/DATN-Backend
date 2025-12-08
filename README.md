@@ -21,13 +21,17 @@ cp env.example .env
 
 ```bash
 # PostgreSQL
-createdb ecommerce_db
+createdb datn_db
 ```
 
 ### 2. Chạy migrations
 
 ```bash
-npm run migrate
+# Chạy migrations
+npm run migrate:up
+
+# Rollback migrations
+npm run migrate:down
 ```
 
 ## Chạy ứng dụng
@@ -56,7 +60,7 @@ cd docker
 docker-compose up -d
 
 # Xem logs
-docker-compose logs -f backend
+docker-compose logs -f app
 
 # Dừng services
 docker-compose down
@@ -70,11 +74,14 @@ docker-compose down -v
 ```bash
 cd docker
 
-# Chạy PostgreSQL và Redis
-docker-compose -f docker-compose.dev.yml up -d
+# Chạy chỉ PostgreSQL và Redis (không chạy app)
+docker-compose up -d db redis
+
+# Xem logs
+docker-compose logs -f db redis
 
 # Dừng
-docker-compose -f docker-compose.dev.yml down
+docker-compose down
 ```
 
 ### Build Docker image
@@ -83,10 +90,10 @@ docker-compose -f docker-compose.dev.yml down
 cd docker
 
 # Build image
-docker build -f Dockerfile -t ecommerce-backend ..
+docker build -f Dockerfile -t datn-backend ..
 
 # Chạy container
-docker run -p 3000:3000 --env-file ../.env ecommerce-backend
+docker run -p 3000:3000 --env-file ../.env datn-backend
 ```
 
 ## Cấu trúc dự án

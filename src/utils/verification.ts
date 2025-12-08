@@ -1,7 +1,7 @@
 import { pool } from '../connections';
 import nodemailer from 'nodemailer';
-import twilio from 'twilio';
-import { emailConfig, smsConfig } from '../connections/config/app.config';
+import { emailConfig } from '../connections/config/app.config';
+import { logger } from './logging';
 
 // Generate random code
 export const generateCode = (length: number = 6): string => {
@@ -19,10 +19,8 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Twilio client
-const twilioClient = smsConfig.accountSid && smsConfig.authToken
-  ? twilio(smsConfig.accountSid, smsConfig.authToken)
-  : null;
+// Firebase Phone Auth is handled on frontend
+// Backend only verifies Firebase ID tokens
 
 // Save verification code to database
 export const saveVerificationCode = async (
@@ -47,40 +45,52 @@ export const sendVerificationEmail = async (
   code: string,
   type: 'verification' | 'password_reset' = 'verification'
 ): Promise<void> => {
+  // Check if email config is set
+  if (!emailConfig.user || !emailConfig.pass) {
+    logger.warn('Email not configured, skipping email send', { email, code });
+    throw new Error('Email service chưa được cấu hình. Vui lòng cấu hình SMTP trong file .env');
+  }
+
   const subject = type === 'verification' 
     ? 'Xác thực tài khoản' 
     : 'Đặt lại mật khẩu';
   
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+  const frontendUrl = process.env.FRONTEND_URL ;
   const link = `${frontendUrl}/verify?code=${code}&type=${type}`;
   
   const html = `
-    <h2>${subject}</h2>
-    <p>Mã xác thực của bạn là: <strong>${code}</strong></p>
-    <p>Hoặc click vào link sau: <a href="${link}">${link}</a></p>
-    <p>Mã này có hiệu lực trong 10 phút.</p>
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #333;">${subject}</h2>
+      <p>Xin chào,</p>
+      <p>Mã xác thực của bạn là: <strong style="font-size: 24px; color: #667eea; letter-spacing: 4px;">${code}</strong></p>
+      <p>Hoặc click vào link sau: <a href="${link}" style="color: #667eea;">${link}</a></p>
+      <p style="color: #999; font-size: 12px;">Mã này có hiệu lực trong 10 phút.</p>
+      <p style="color: #999; font-size: 12px;">Nếu bạn không yêu cầu mã này, vui lòng bỏ qua email này.</p>
+    </div>
   `;
 
-  await transporter.sendMail({
-    from: emailConfig.user,
-    to: email,
-    subject,
-    html,
-  });
+  try {
+    await transporter.sendMail({
+      from: `"DATN System" <${emailConfig.user}>`,
+      to: email,
+      subject,
+      html,
+    });
+    logger.info('Verification email sent successfully', { email, type });
+  } catch (error: any) {
+    logger.error('Failed to send verification email', { email, error: error.message });
+    throw new Error('Không thể gửi email. Vui lòng kiểm tra cấu hình SMTP.');
+  }
 };
 
 // Send OTP via SMS
+// NOTE: With Firebase Phone Auth, SMS is sent by Firebase on the frontend
+// This function is kept for backward compatibility but should not be used with Firebase
 export const sendOTP = async (phone: string, code: string): Promise<void> => {
-  if (!twilioClient) {
-    console.warn('Twilio not configured, skipping SMS send');
-    return;
-  }
-
-  await twilioClient.messages.create({
-    body: `Mã OTP của bạn là: ${code}. Mã này có hiệu lực trong 10 phút.`,
-    from: smsConfig.phoneNumber,
-    to: phone,
-  });
+  // Firebase Phone Auth handles SMS sending on the frontend
+  // Backend should not send SMS when using Firebase
+  logger.warn('sendOTP called but Firebase Phone Auth is used. SMS should be sent from frontend.');
+  throw new Error('Với Firebase Phone Auth, SMS được gửi từ frontend. Vui lòng sử dụng Firebase SDK trên frontend để gửi OTP.');
 };
 
 // Verify code

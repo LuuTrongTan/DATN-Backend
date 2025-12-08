@@ -1,8 +1,11 @@
 // Database
-export { pool, migrate } from './db';
+export { pool, migrate, connectDatabase } from './db';
 
 // Redis
-export { redisClient } from './redis';
+export { redisClient, connectRedis } from './redis';
+
+// Firebase
+export { initializeFirebase, getFirebaseAdmin, verifyFirebaseToken, getFirebaseUserByPhone } from './firebase';
 
 // Config - All configurations in one place
 export { 

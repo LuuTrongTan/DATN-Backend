@@ -1,2 +1,2 @@
-export { redisClient } from './redis.connection';
+export { redisClient, connectRedis } from './redis.connection';
 

@@ -87,6 +87,8 @@ export const getProductReviews = async (req: AuthRequest, res: Response) => {
   try {
     const { productId } = req.params;
     const { page = 1, limit = 10 } = req.query;
+    const pageNum = parseInt(page as string) || 1;
+    const limitNum = parseInt(limit as string) || 10;
 
     const result = await pool.query(
       `SELECT r.*, u.full_name, u.email
@@ -95,7 +97,7 @@ export const getProductReviews = async (req: AuthRequest, res: Response) => {
        WHERE r.product_id = $1 AND r.is_approved = TRUE
        ORDER BY r.created_at DESC
        LIMIT $2 OFFSET $3`,
-      [productId, limit, (page - 1) * limit]
+      [productId, limitNum, (pageNum - 1) * limitNum]
     );
 
     const countResult = await pool.query(

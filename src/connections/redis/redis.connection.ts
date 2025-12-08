@@ -1,41 +1,38 @@
 import { createClient } from 'redis';
 import { redisConfig } from '../config/redis.config';
+import { logger } from '../../utils/logging';
 
 const client = createClient({
   socket: {
     host: redisConfig.host,
     port: redisConfig.port,
   },
-  password: redisConfig.password,
+  ...(redisConfig.password && { password: redisConfig.password }),
   database: redisConfig.db,
 });
 
 client.on('error', (err) => {
-  console.error('Redis Client Error', err);
+  logger.error('Redis Client Error', { error: err.message, stack: err.stack });
 });
 
-client.on('connect', () => {
-  console.log('Redis connected successfully');
-});
-
-client.on('ready', () => {
-  console.log('Redis client ready');
-});
-
-// Connect to Redis
-const connectRedis = async () => {
+/**
+ * Connect to Redis
+ * @returns Promise that resolves when Redis is connected
+ */
+export const connectRedis = async (): Promise<void> => {
   try {
     if (!client.isOpen) {
       await client.connect();
-      console.log('Redis connected successfully');
+      logger.info('Redis connected successfully');
+    } else {
+      logger.info('Redis already connected');
     }
-  } catch (err) {
-    console.error('Failed to connect to Redis:', err);
+    return Promise.resolve();
+  } catch (err: any) {
+    logger.error('Failed to connect to Redis:', { error: err.message, stack: err.stack });
+    throw err;
   }
 };
-
-// Auto connect
-connectRedis();
 
 export const redisClient = client;
 

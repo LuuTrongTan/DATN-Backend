@@ -14,6 +14,9 @@ router.post('/resend-verification', rateLimiters.verification, authController.re
 // UC-03: Xác thực
 router.post('/verify', authController.verify);
 
+// Firebase Phone Auth: Verify Firebase ID token
+router.post('/verify-firebase-phone', authController.verifyFirebasePhone);
+
 // UC-04: Quên mật khẩu (có rate limiting)
 router.post('/forgot-password', rateLimiters.auth, authController.forgotPassword);
 

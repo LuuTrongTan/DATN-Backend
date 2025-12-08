@@ -1,0 +1,20 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 30
+    },
+    "auditLog": "C:\\Users\\tan\\Desktop\\XgameProject\\DATN\\Backend\\logs_local\\.ee0fd7928de4658f88a64ba5d4c1863be90b5dbe-audit.json",
+    "files": [
+        {
+            "date": 1765074035650,
+            "name": "C:\\Users\\tan\\Desktop\\XgameProject\\DATN\\Backend\\logs_local\\error-2025-12-07.log",
+            "hash": "4f4ebd04669e9a7696cef101204926fffa3f2e0c7f1a98af2b651151dc88916a"
+        },
+        {
+            "date": 1765158377656,
+            "name": "C:\\Users\\tan\\Desktop\\XgameProject\\DATN\\Backend\\logs_local\\error-2025-12-08.log",
+            "hash": "94434eea864895f6ee741536e743a1c9adddab15b2c9b512ee33d27540f3a987"
+        }
+    ],
+    "hashType": "sha256"
+}

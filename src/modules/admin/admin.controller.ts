@@ -116,6 +116,8 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
 export const getAllOrders = async (req: AuthRequest, res: Response) => {
   try {
     const { status, page = 1, limit = 20 } = req.query;
+    const pageNum = parseInt(page as string) || 1;
+    const limitNum = parseInt(limit as string) || 20;
 
     let query = 'SELECT * FROM orders WHERE 1=1';
     const params: any[] = [];
@@ -129,11 +131,11 @@ export const getAllOrders = async (req: AuthRequest, res: Response) => {
 
     paramCount++;
     query += ` ORDER BY created_at DESC LIMIT $${paramCount}`;
-    params.push(limit);
+    params.push(limitNum);
 
     paramCount++;
     query += ` OFFSET $${paramCount}`;
-    params.push((page - 1) * limit);
+    params.push((pageNum - 1) * limitNum);
 
     const result = await pool.query(query, params);
 
@@ -203,6 +205,8 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
 export const getUsers = async (req: AuthRequest, res: Response) => {
   try {
     const { role, page = 1, limit = 20 } = req.query;
+    const pageNum = parseInt(page as string) || 1;
+    const limitNum = parseInt(limit as string) || 20;
 
     let query = 'SELECT id, email, phone, full_name, role, is_active, is_banned, created_at FROM users WHERE 1=1';
     const params: any[] = [];
@@ -216,11 +220,11 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
     paramCount++;
     query += ` ORDER BY created_at DESC LIMIT $${paramCount}`;
-    params.push(limit);
+    params.push(limitNum);
 
     paramCount++;
     query += ` OFFSET $${paramCount}`;
-    params.push((page - 1) * limit);
+    params.push((pageNum - 1) * limitNum);
 
     const result = await pool.query(query, params);
 

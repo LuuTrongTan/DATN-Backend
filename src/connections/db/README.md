@@ -34,7 +34,10 @@ const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
 
 ```bash
 # Chạy tất cả migrations chưa được thực thi
-npm run migrate
+npm run migrate:up
+
+# Rollback migrations
+npm run migrate:down
 ```
 
 Migrations sẽ được chạy tự động theo thứ tự số (001, 002, 003...). Mỗi migration chỉ chạy một lần và được lưu vào bảng `migrations`.
@@ -43,7 +46,7 @@ Migrations sẽ được chạy tự động theo thứ tự số (001, 002, 003
 
 1. Tạo file SQL trong thư mục `migrations/` với format: `XXX_description.sql`
 2. Số thứ tự phải lớn hơn migration cuối cùng
-3. Chạy `npm run migrate` để thực thi
+3. Chạy `npm run migrate:up` để thực thi
 
 ### Migration Files
 
@@ -66,7 +69,7 @@ Cấu hình database trong file `.env`:
 ```env
 DB_HOST=localhost
 DB_PORT=5432
-DB_NAME=ecommerce_db
+DB_NAME=datn_db
 DB_USER=postgres
 DB_PASSWORD=your_password
 ```

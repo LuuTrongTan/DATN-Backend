@@ -1,5 +1,6 @@
 import { pool } from './connection';
 import { migrations } from './migrations';
+import { logger } from '../../utils/logging';
 
 // Create migrations table if not exists
 const createMigrationsTable = async () => {
@@ -37,10 +38,10 @@ const runMigration = async (name: string, migration: any) => {
     await migration.up(client);
     await markMigrationExecuted(name);
     await client.query('COMMIT');
-    console.log(`✓ Migration ${name} executed successfully`);
-  } catch (error) {
+    logger.info(`Migration ${name} executed successfully`);
+  } catch (error: any) {
     await client.query('ROLLBACK');
-    console.error(`✗ Migration ${name} failed:`, error);
+    logger.error(`Migration ${name} failed:`, { error: error.message, stack: error.stack });
     throw error;
   } finally {
     client.release();
@@ -55,10 +56,10 @@ const rollbackMigration = async (name: string, migration: any) => {
     await migration.down(client);
     await pool.query('DELETE FROM migrations WHERE name = $1', [name]);
     await client.query('COMMIT');
-    console.log(`✓ Migration ${name} rolled back successfully`);
-  } catch (error) {
+    logger.info(`Migration ${name} rolled back successfully`);
+  } catch (error: any) {
     await client.query('ROLLBACK');
-    console.error(`✗ Migration ${name} rollback failed:`, error);
+    logger.error(`Migration ${name} rollback failed:`, { error: error.message, stack: error.stack });
     throw error;
   } finally {
     client.release();
@@ -68,17 +69,17 @@ const rollbackMigration = async (name: string, migration: any) => {
 // Run all pending migrations
 export const migrate = async () => {
   try {
-    console.log('Starting database migrations...');
+    logger.info('Starting database migrations...');
     
     // Create migrations table
     await createMigrationsTable();
     
-    console.log(`Found ${migrations.length} migration files`);
+    logger.info(`Found ${migrations.length} migration files`);
     
     for (const { name, migration } of migrations) {
       // Skip if already executed
       if (await isMigrationExecuted(name)) {
-        console.log(`⊘ Migration ${name} already executed, skipping...`);
+        logger.info(`Migration ${name} already executed, skipping...`);
         continue;
       }
       
@@ -86,9 +87,9 @@ export const migrate = async () => {
       await runMigration(name, migration);
     }
     
-    console.log('All migrations completed successfully!');
-  } catch (error) {
-    console.error('Migration error:', error);
+    logger.info('All migrations completed successfully!');
+  } catch (error: any) {
+    logger.error('Migration error:', { error: error.message, stack: error.stack });
     process.exit(1);
   } finally {
     await pool.end();
@@ -98,7 +99,7 @@ export const migrate = async () => {
 // Rollback last migration
 export const rollback = async () => {
   try {
-    console.log('Rolling back last migration...');
+    logger.info('Rolling back last migration...');
     
     await createMigrationsTable();
     
@@ -108,7 +109,7 @@ export const rollback = async () => {
     );
     
     if (result.rows.length === 0) {
-      console.log('No migrations to rollback');
+      logger.info('No migrations to rollback');
       return;
     }
     
@@ -116,14 +117,56 @@ export const rollback = async () => {
     const migrationInfo = migrations.find(m => m.name === lastMigrationName);
     
     if (!migrationInfo) {
-      console.error(`Migration ${lastMigrationName} not found in migrations list`);
+      logger.error(`Migration ${lastMigrationName} not found in migrations list`);
       return;
     }
     
     await rollbackMigration(lastMigrationName, migrationInfo.migration);
-    console.log('Rollback completed successfully!');
-  } catch (error) {
-    console.error('Rollback error:', error);
+    logger.info('Rollback completed successfully!');
+  } catch (error: any) {
+    logger.error('Rollback error:', { error: error.message, stack: error.stack });
+    process.exit(1);
+  } finally {
+    await pool.end();
+  }
+};
+
+// Rollback all migrations
+export const rollbackAll = async () => {
+  try {
+    logger.info('Rolling back all migrations...');
+    
+    await createMigrationsTable();
+    
+    // Get all executed migrations in reverse order (newest first)
+    const result = await pool.query(
+      'SELECT name FROM migrations ORDER BY executed_at DESC'
+    );
+    
+    if (result.rows.length === 0) {
+      logger.info('No migrations to rollback');
+      return;
+    }
+    
+    logger.info(`Found ${result.rows.length} migrations to rollback`);
+    
+    // Rollback each migration in reverse order
+    for (const row of result.rows) {
+      const migrationName = row.name;
+      const migrationInfo = migrations.find(m => m.name === migrationName);
+      
+      if (!migrationInfo) {
+        logger.warn(`Migration ${migrationName} not found in migrations list, skipping...`);
+        continue;
+      }
+      
+      logger.info(`Rolling back migration: ${migrationName}`);
+      await rollbackMigration(migrationName, migrationInfo.migration);
+    }
+    
+    logger.info('All migrations rolled back successfully!');
+  } catch (error: any) {
+    logger.error('Rollback all error:', { error: error.message, stack: error.stack });
     process.exit(1);
   } finally {
     await pool.end();
@@ -136,6 +179,8 @@ if (require.main === module) {
   
   if (command === 'rollback') {
     rollback();
+  } else if (command === 'rollback:all') {
+    rollbackAll();
   } else {
     migrate();
   }

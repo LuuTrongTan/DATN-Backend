@@ -1,5 +1,5 @@
 {
-  "name": "ecommerce-backend",
+  "name": "datn-backend",
   "version": "1.0.0",
   "description": "Backend API cho hệ thống cửa hàng trực tuyến",
   "main": "dist/index.js",
@@ -7,37 +7,49 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "migrate": "tsx src/connections/db/migrate.ts",
-    "migrate:rollback": "tsx src/connections/db/migrate.ts rollback"
+    "migrate:up": "tsx src/connections/db/migrate.ts",
+    "migrate:down": "tsx src/connections/db/migrate.ts rollback",
+    "migrate:down:all": "tsx src/connections/db/migrate.ts rollback:all",
+    "drop": "tsx src/connections/db/migrate.ts rollback:all"
   },
-  "keywords": ["ecommerce", "api", "nodejs"],
+  "keywords": [
+    "datn",
+    "api",
+    "nodejs",
+    "backend"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "express": "^4.18.2",
+    "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2",
-    "pg": "^8.11.3",
-    "nodemailer": "^6.9.7",
-    "twilio": "^4.19.0",
-    "multer": "^1.4.5-lts.1",
-    "zod": "^3.22.4",
+    "express": "^4.18.2",
     "express-validator": "^7.0.1",
-    "redis": "^4.6.12"
+    "firebase": "^12.6.0",
+    "firebase-admin": "^13.6.0",
+    "form-data": "^4.0.5",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.7",
+    "pg": "^8.11.3",
+    "redis": "^4.6.12",
+    "uuid": "^13.0.0",
+    "winston": "^3.18.3",
+    "winston-daily-rotate-file": "^5.0.0",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
-    "@types/node": "^20.10.5",
     "@types/bcryptjs": "^2.4.6",
-    "@types/jsonwebtoken": "^9.0.5",
-    "@types/pg": "^8.10.9",
-    "@types/nodemailer": "^6.4.14",
-    "@types/multer": "^1.4.11",
     "@types/cors": "^2.8.17",
-    "typescript": "^5.3.3",
-    "tsx": "^4.7.0"
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/multer": "^1.4.11",
+    "@types/node": "^20.10.5",
+    "@types/nodemailer": "^6.4.14",
+    "@types/pg": "^8.10.9",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
   }
 }
-

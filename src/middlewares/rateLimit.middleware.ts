@@ -1,4 +1,5 @@
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
+import { AuthRequest } from '../types/request.types';
 import { logger } from '../utils/logging';
 import { ResponseHandler } from '../utils/response';
 
@@ -30,7 +31,7 @@ setInterval(() => {
 /**
  * Get client identifier for rate limiting
  */
-const getClientId = (req: Request): string => {
+const getClientId = (req: AuthRequest): string => {
   // Prefer IP address, fallback to user ID if authenticated
   return req.user?.id?.toString() || req.ip || 'unknown';
 };
@@ -43,7 +44,7 @@ export const rateLimit = (
   maxRequests: number = 5, // 5 requests per window
   message?: string
 ) => {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
     const clientId = getClientId(req);
     const now = Date.now();
     const key = `${req.path}:${clientId}`;

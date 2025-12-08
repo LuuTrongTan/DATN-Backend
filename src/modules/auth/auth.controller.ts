@@ -16,9 +16,9 @@ import {
   generateCode,
   saveVerificationCode,
   sendVerificationEmail,
-  sendOTP,
   verifyCode,
 } from '../../utils/verification';
+import { verifyFirebaseToken, getFirebaseUserByPhone } from '../../connections';
 import { appConfig } from '../../connections/config/app.config';
 import { ResponseHandler } from '../../utils/response';
 import { logger, auditLog } from '../../utils/logging';
@@ -67,7 +67,9 @@ export const register = async (req: AuthRequest, res: Response) => {
     if (email) {
       await sendVerificationEmail(email, code, 'verification');
     } else if (phone) {
-      await sendOTP(phone, code);
+      // With Firebase Phone Auth, SMS is sent from frontend
+      // Backend only verifies Firebase ID token
+      logger.info('[Register] Phone registration - Firebase Phone Auth should be used on frontend', { phone });
     }
 
     auditLog('USER_REGISTERED', {
@@ -148,7 +150,8 @@ export const resendVerification = async (req: AuthRequest, res: Response) => {
     if (email) {
       await sendVerificationEmail(email, code, 'verification');
     } else if (phone) {
-      await sendOTP(phone, code);
+      // With Firebase Phone Auth, SMS is sent from frontend
+      logger.info('[ResendVerification] Phone verification - Firebase Phone Auth should be used on frontend', { phone });
     }
 
     logger.info('[ResendVerification] Code sent successfully', { userId: user.id, email, phone });
@@ -244,7 +247,8 @@ export const forgotPassword = async (req: AuthRequest, res: Response) => {
     if (email) {
       await sendVerificationEmail(email, code, 'password_reset');
     } else if (phone) {
-      await sendOTP(phone, code);
+      // With Firebase Phone Auth, SMS is sent from frontend
+      logger.info('[ForgotPassword] Phone reset - Firebase Phone Auth should be used on frontend', { phone });
     }
 
     auditLog('PASSWORD_RESET_REQUESTED', {
@@ -284,9 +288,10 @@ export const login = async (req: AuthRequest, res: Response) => {
 
     if (!user.is_verified) {
       logger.warn('[Login] Account not verified', { userId: user.id, ip: req.ip });
-      return ResponseHandler.forbidden(
+      return ResponseHandler.error(
         res,
         'Tài khoản chưa được xác thực',
+        403,
         {
           code: 'ACCOUNT_NOT_VERIFIED',
           details: { suggestion: 'Vui lòng xác thực tài khoản trước khi đăng nhập' },
@@ -310,15 +315,15 @@ export const login = async (req: AuthRequest, res: Response) => {
     // Generate JWT access token
     const token = jwt.sign(
       { userId: user.id, role: user.role },
-      appConfig.jwtSecret,
-      { expiresIn: appConfig.jwtExpiresIn }
+      appConfig.jwtSecret as string,
+      { expiresIn: appConfig.jwtExpiresIn } as any
     );
 
     // Generate refresh token (longer expiry, e.g., 30 days)
     const refreshToken = jwt.sign(
       { userId: user.id, role: user.role, type: 'refresh' },
-      appConfig.jwtSecret,
-      { expiresIn: '30d' }
+      appConfig.jwtSecret as string,
+      { expiresIn: '30d' } as any
     );
 
     auditLog('USER_LOGIN', {
@@ -667,15 +672,15 @@ export const refreshToken = async (req: AuthRequest, res: Response) => {
       // Generate new access token
       const newToken = jwt.sign(
         { userId: user.id, role: user.role },
-        appConfig.jwtSecret,
-        { expiresIn: appConfig.jwtExpiresIn }
+        appConfig.jwtSecret as string,
+        { expiresIn: appConfig.jwtExpiresIn } as any
       );
 
       // Generate new refresh token
       const newRefreshToken = jwt.sign(
         { userId: user.id, role: user.role, type: 'refresh' },
-        appConfig.jwtSecret,
-        { expiresIn: '30d' }
+        appConfig.jwtSecret as string,
+        { expiresIn: '30d' } as any
       );
 
       logger.info('[RefreshToken] Token refreshed successfully', { userId: user.id });
@@ -733,6 +738,183 @@ export const deactivateAccount = async (req: AuthRequest, res: Response) => {
     return ResponseHandler.success(res, null, 'Vô hiệu hóa tài khoản thành công');
   } catch (error: any) {
     return ResponseHandler.internalError(res, 'Lỗi khi vô hiệu hóa tài khoản', error);
+  }
+};
+
+// Verify Firebase Phone Auth
+export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
+  try {
+    logger.info('[VerifyFirebasePhone] Starting Firebase phone verification', {
+      ip: req.ip,
+      hasIdToken: !!req.body.idToken,
+      hasPhone: !!req.body.phone,
+      hasEmail: !!req.body.email,
+      hasPassword: !!req.body.password,
+    });
+
+    const { idToken, phone, email, password } = req.body;
+
+    if (!idToken) {
+      logger.warn('[VerifyFirebasePhone] Missing Firebase ID token', { ip: req.ip });
+      return ResponseHandler.error(res, 'Firebase ID token không được để trống', 400);
+    }
+
+    // Verify Firebase ID token
+    logger.info('[VerifyFirebasePhone] Verifying Firebase ID token...');
+    const decodedToken = await verifyFirebaseToken(idToken);
+
+    logger.info('[VerifyFirebasePhone] Firebase token verified, checking phone number match', {
+      tokenPhone: decodedToken.phone_number,
+      providedPhone: phone,
+    });
+
+    // Verify phone number matches
+    if (phone && decodedToken.phone_number !== phone) {
+      logger.warn('[VerifyFirebasePhone] Phone number mismatch', { 
+        tokenPhone: decodedToken.phone_number, 
+        providedPhone: phone,
+        ip: req.ip,
+      });
+      return ResponseHandler.error(res, 'Số điện thoại không khớp với token', 400);
+    }
+
+    const phoneNumber = decodedToken.phone_number || phone;
+    const userEmail = decodedToken.email || email;
+
+    logger.info('[VerifyFirebasePhone] Searching for existing user', {
+      phone: phoneNumber,
+      email: userEmail,
+    });
+
+    // Find or create user
+    let userResult = await pool.query(
+      'SELECT id, email, phone, role, is_verified FROM users WHERE phone = $1 OR email = $2',
+      [phoneNumber, userEmail]
+    );
+
+    let user;
+    if (userResult.rows.length === 0) {
+      logger.info('[VerifyFirebasePhone] User not found, creating new user', {
+        phone: phoneNumber,
+        email: userEmail,
+      });
+
+      // Hash password if provided (for registration)
+      let passwordHash = null;
+      if (password) {
+        logger.info('[VerifyFirebasePhone] Hashing password for new user');
+        passwordHash = await bcrypt.hash(password, 10);
+      }
+
+      // Create new user if doesn't exist
+      const result = await pool.query(
+        `INSERT INTO users (email, phone, password_hash, is_verified)
+         VALUES ($1, $2, $3, TRUE)
+         RETURNING id, email, phone, role`,
+        [userEmail, phoneNumber, passwordHash]
+      );
+      user = result.rows[0];
+      
+      logger.info('[VerifyFirebasePhone] New user created successfully', {
+        userId: user.id,
+        phone: user.phone,
+        email: user.email,
+      });
+      
+      auditLog('USER_REGISTERED_VIA_FIREBASE', {
+        userId: user.id,
+        phone: phoneNumber,
+        email: userEmail,
+        ip: req.ip,
+      });
+    } else {
+      user = userResult.rows[0];
+      
+      logger.info('[VerifyFirebasePhone] Existing user found', {
+        userId: user.id,
+        phone: user.phone,
+        email: user.email,
+        isVerified: user.is_verified,
+      });
+      
+      // Update user as verified if not already
+      if (!user.is_verified) {
+        logger.info('[VerifyFirebasePhone] Updating user verification status', { userId: user.id });
+        await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [user.id]);
+        user.is_verified = true;
+      }
+    }
+
+    // Check if user is active and not banned
+    const userStatus = await pool.query(
+      'SELECT is_active, is_banned FROM users WHERE id = $1',
+      [user.id]
+    );
+
+    if (userStatus.rows.length > 0) {
+      const { is_active, is_banned } = userStatus.rows[0];
+      if (!is_active || is_banned) {
+        logger.warn('[VerifyFirebasePhone] Account is inactive or banned', {
+          userId: user.id,
+          is_active,
+          is_banned,
+          ip: req.ip,
+        });
+        return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
+      }
+    }
+
+    logger.info('[VerifyFirebasePhone] Generating JWT tokens', { userId: user.id });
+
+    // Generate JWT access token
+    const token = jwt.sign(
+      { userId: user.id, role: user.role },
+      appConfig.jwtSecret as string,
+      { expiresIn: appConfig.jwtExpiresIn } as any
+    );
+
+    // Generate refresh token
+    const refreshToken = jwt.sign(
+      { userId: user.id, role: user.role, type: 'refresh' },
+      appConfig.jwtSecret as string,
+      { expiresIn: '30d' } as any
+    );
+
+    auditLog('USER_VERIFIED_VIA_FIREBASE', {
+      userId: user.id,
+      phone: phoneNumber,
+      email: userEmail,
+      ip: req.ip,
+    });
+
+    logger.info('[VerifyFirebasePhone] Phone verified successfully', { 
+      userId: user.id, 
+      phone: phoneNumber,
+      email: userEmail,
+      role: user.role,
+    });
+
+    const responseData: LoginResponse = {
+      token,
+      refreshToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+      },
+    };
+
+    return ResponseHandler.success(res, responseData, 'Xác thực số điện thoại thành công');
+  } catch (error: any) {
+    logger.error('[VerifyFirebasePhone] Error during Firebase phone verification', {
+      error: error.message,
+      code: error.code,
+      name: error.name,
+      stack: error.stack,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi xác thực số điện thoại', error);
   }
 };
 
