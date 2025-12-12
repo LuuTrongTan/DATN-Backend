@@ -14,3 +14,8 @@ export * from './user-address.model';
 export * from './wishlist.model';
 export * from './stock-history.model';
 export * from './stock-alert.model';
+export * from './coupon.model';
+export * from './shipping.model';
+export * from './faq.model';
+export * from './support-ticket.model';
+export * from './refund.model';

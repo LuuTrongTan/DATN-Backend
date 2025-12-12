@@ -3,6 +3,7 @@ import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { orderSchema } from './orders.validation';
 import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../../utils/email.service';
+import { createShippingRecord } from '../shipping/shipping.service';
 
 // UC-12: Đặt hàng
 export const createOrder = async (req: AuthRequest, res: Response) => {
@@ -51,11 +52,87 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Calculate shipping fee (simplified)
-    const shippingFee = 0; // TODO: Calculate based on address
+    // Apply coupon if provided
+    let discountAmount = 0;
+    let couponId: number | null = null;
+    
+    if (validated.coupon_code) {
+      try {
+        const productIds = orderItems.map(item => item.product_id);
+        const categoryIds = orderItems
+          .map(item => item.product_id)
+          .filter((id, index, self) => self.indexOf(id) === index); // Get unique product IDs
+        
+        // Get categories for products
+        const categoryResult = await pool.query(
+          `SELECT DISTINCT category_id FROM products WHERE id = ANY($1::int[]) AND category_id IS NOT NULL`,
+          [productIds]
+        );
+        const categoryIdsFromProducts = categoryResult.rows.map(r => r.category_id);
+
+        const couponResponse = await pool.query(
+          `SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE`,
+          [validated.coupon_code.toUpperCase()]
+        );
+
+        if (couponResponse.rows.length > 0) {
+          const coupon = couponResponse.rows[0];
+          const now = new Date();
+          const startDate = new Date(coupon.start_date);
+          const endDate = new Date(coupon.end_date);
+
+          if (now >= startDate && now <= endDate) {
+            if (!coupon.usage_limit || coupon.used_count < coupon.usage_limit) {
+              const userUsageCount = await pool.query(
+                'SELECT COUNT(*) FROM coupon_usage WHERE coupon_id = $1 AND user_id = $2',
+                [coupon.id, userId]
+              );
+
+              if (parseInt(userUsageCount.rows[0].count) < coupon.user_limit) {
+                if (totalAmount >= coupon.min_order_amount) {
+                  // Check applicable to
+                  let isApplicable = true;
+                  if (coupon.applicable_to === 'category' && coupon.category_id) {
+                    isApplicable = categoryIdsFromProducts.includes(coupon.category_id);
+                  } else if (coupon.applicable_to === 'product' && coupon.product_id) {
+                    isApplicable = productIds.includes(coupon.product_id);
+                  }
+
+                  if (isApplicable) {
+                    // Calculate discount
+                    if (coupon.discount_type === 'percentage') {
+                      discountAmount = (totalAmount * coupon.discount_value) / 100;
+                      if (coupon.max_discount_amount && discountAmount > coupon.max_discount_amount) {
+                        discountAmount = coupon.max_discount_amount;
+                      }
+                    } else {
+                      discountAmount = coupon.discount_value;
+                    }
+
+                    if (discountAmount > totalAmount) {
+                      discountAmount = totalAmount;
+                    }
+
+                    couponId = coupon.id;
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Silent fail, continue without coupon
+        console.error('Error applying coupon:', error);
+      }
+    }
+
+    // Calculate shipping fee (simplified - will be replaced by shipping service)
+    const shippingFee = validated.shipping_fee || 30000; // Default 30k
 
     // Create order
     const orderNumber = `ORD-${Date.now()}-${userId}`;
+    const finalAmount = totalAmount - discountAmount + shippingFee;
+    
     const orderResult = await pool.query(
       `INSERT INTO orders (user_id, order_number, total_amount, shipping_address, 
         payment_method, shipping_fee, notes)
@@ -64,7 +141,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       [
         userId,
         orderNumber,
-        totalAmount + shippingFee,
+        finalAmount,
         validated.shipping_address,
         validated.payment_method,
         shippingFee,
@@ -129,18 +206,39 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       );
     }
 
+    // Record coupon usage if applied
+    if (couponId && discountAmount > 0) {
+      await pool.query(
+        `INSERT INTO coupon_usage (coupon_id, user_id, order_id, discount_amount)
+         VALUES ($1, $2, $3, $4)`,
+        [couponId, userId, order.id, discountAmount]
+      );
+
+      // Update coupon used count
+      await pool.query(
+        'UPDATE coupons SET used_count = used_count + 1 WHERE id = $1',
+        [couponId]
+      );
+    }
+
+    // Create shipping record
+    try {
+      await createShippingRecord(pool, {
+        order_id: order.id,
+        shipping_fee: shippingFee,
+        shipping_provider: 'GHTK',
+      });
+    } catch (error) {
+      // Log error but don't fail order creation
+      console.error('Error creating shipping record:', error);
+    }
+
     // Clear cart
     await pool.query('DELETE FROM cart_items WHERE user_id = $1', [userId]);
 
     // Handle payment
-    if (validated.payment_method === 'online') {
-      // TODO: Integrate payment gateway
-      // For now, mark as paid
-      await pool.query(
-        'UPDATE orders SET payment_status = $1, order_status = $2 WHERE id = $3',
-        ['paid', 'confirmed', order.id]
-      );
-    }
+    // For online payment, return payment URL in response
+    // For COD, order is already created with pending payment status
 
     // Get user info for email
     const userResult = await pool.query(
@@ -180,13 +278,39 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    res.status(201).json({
+    // Prepare response
+    const response: any = {
       message: 'Đặt hàng thành công',
       order: {
         ...order,
         items: orderItems,
       },
-    });
+    };
+
+    // If online payment, create payment URL
+    if (validated.payment_method === 'online') {
+      try {
+        const { createPaymentUrl } = require('../payment/vnpay.service');
+        const paymentUrl = createPaymentUrl(
+          order.id,
+          order.order_number,
+          parseFloat(finalAmount.toString()),
+          `Thanh toan don hang ${order.order_number}`,
+          'other',
+          'vn',
+          req.ip || '127.0.0.1'
+        );
+
+        if (paymentUrl) {
+          response.payment_url = paymentUrl;
+        }
+      } catch (error) {
+        // VNPay not configured, continue without payment URL
+        console.error('Error creating payment URL:', error);
+      }
+    }
+
+    res.status(201).json(response);
   } catch (error: any) {
     if (error.name === 'ZodError') {
       return res.status(400).json({

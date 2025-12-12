@@ -16,7 +16,14 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
 
     if (q) {
       paramCount++;
-      query += ` AND (p.name ILIKE $${paramCount} OR p.description ILIKE $${paramCount})`;
+      // Full-text search using PostgreSQL tsvector (if available) or ILIKE
+      // For better performance, you can create a tsvector column and GIN index
+      query += ` AND (
+        p.name ILIKE $${paramCount} 
+        OR p.description ILIKE $${paramCount}
+        OR p.name % $${paramCount}
+        OR to_tsvector('simple', COALESCE(p.name, '') || ' ' || COALESCE(p.description, '')) @@ plainto_tsquery('simple', $${paramCount})
+      )`;
       params.push(`%${q}%`);
     }
 
