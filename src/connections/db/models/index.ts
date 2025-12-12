@@ -10,3 +10,7 @@ export * from './order-item.model';
 export * from './order-status-history.model';
 export * from './review.model';
 export * from './daily-statistics.model';
+export * from './user-address.model';
+export * from './wishlist.model';
+export * from './stock-history.model';
+export * from './stock-alert.model';

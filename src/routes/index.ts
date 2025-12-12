@@ -6,6 +6,9 @@ import ordersRoutes from '../modules/orders/orders.routes';
 import reviewsRoutes from '../modules/reviews/reviews.routes';
 import adminRoutes from '../modules/admin/admin.routes';
 import uploadRoutes from '../modules/upload/upload.routes';
+import addressesRoutes from '../modules/addresses/addresses.routes';
+import wishlistRoutes from '../modules/wishlist/wishlist.routes';
+import inventoryRoutes from '../modules/inventory/inventory.routes';
 
 const router = express.Router();
 
@@ -17,6 +20,9 @@ router.use('/orders', ordersRoutes);
 router.use('/reviews', reviewsRoutes);
 router.use('/admin', adminRoutes);
 router.use('/upload', uploadRoutes);
+router.use('/addresses', addressesRoutes);
+router.use('/wishlist', wishlistRoutes);
+router.use('/inventory', inventoryRoutes);
 
 export default router;
 

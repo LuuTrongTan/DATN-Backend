@@ -2,6 +2,7 @@ import { Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
+import { sendOrderStatusUpdateEmail } from '../../utils/email.service';
 
 // UC-18, UC-19, UC-20: Quản lý danh mục
 export const createCategory = async (req: AuthRequest, res: Response) => {
@@ -103,6 +104,28 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
        VALUES ($1, $2, $3, $4)`,
       [id, status, notes || null, req.user!.id]
     );
+
+    // Get user info for email notification
+    const order = orderResult.rows[0];
+    const userResult = await pool.query(
+      'SELECT email, full_name FROM users WHERE id = $1',
+      [order.user_id]
+    );
+    
+    if (userResult.rows.length > 0 && userResult.rows[0].email) {
+      try {
+        await sendOrderStatusUpdateEmail(
+          userResult.rows[0].email,
+          userResult.rows[0].full_name || 'Khách hàng',
+          order.order_number,
+          status,
+          notes || undefined
+        );
+      } catch (error: any) {
+        // Log error but don't fail the request
+        console.error('Failed to send order status update email:', error);
+      }
+    }
 
     res.json({
       message: 'Cập nhật trạng thái đơn hàng thành công',

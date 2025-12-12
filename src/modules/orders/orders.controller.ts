@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { orderSchema } from './orders.validation';
+import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../../utils/email.service';
 
 // UC-12: Đặt hàng
 export const createOrder = async (req: AuthRequest, res: Response) => {
@@ -81,18 +82,51 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
         [order.id, item.product_id, item.variant_id, item.quantity, item.price]
       );
 
+      // Get current stock before update
+      let currentStock: number;
+      if (item.variant_id) {
+        const stockResult = await pool.query(
+          'SELECT stock_quantity FROM product_variants WHERE id = $1',
+          [item.variant_id]
+        );
+        currentStock = parseInt(stockResult.rows[0].stock_quantity);
+      } else {
+        const stockResult = await pool.query(
+          'SELECT stock_quantity FROM products WHERE id = $1',
+          [item.product_id]
+        );
+        currentStock = parseInt(stockResult.rows[0].stock_quantity);
+      }
+
+      const newStock = currentStock - item.quantity;
+
       // Update stock (will be finalized after payment confirmation)
       if (item.variant_id) {
         await pool.query(
-          'UPDATE product_variants SET stock_quantity = stock_quantity - $1 WHERE id = $2',
-          [item.quantity, item.variant_id]
+          'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2',
+          [newStock, item.variant_id]
         );
       } else {
         await pool.query(
-          'UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2',
-          [item.quantity, item.product_id]
+          'UPDATE products SET stock_quantity = $1 WHERE id = $2',
+          [newStock, item.product_id]
         );
       }
+
+      // Create stock history
+      await pool.query(
+        `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
+         VALUES ($1, $2, 'out', $3, $4, $5, $6, $7)`,
+        [
+          item.product_id,
+          item.variant_id || null,
+          item.quantity,
+          currentStock,
+          newStock,
+          `Đơn hàng #${order.order_number}`,
+          userId,
+        ]
+      );
     }
 
     // Clear cart
@@ -106,6 +140,44 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
         'UPDATE orders SET payment_status = $1, order_status = $2 WHERE id = $3',
         ['paid', 'confirmed', order.id]
       );
+    }
+
+    // Get user info for email
+    const userResult = await pool.query(
+      'SELECT email, full_name FROM users WHERE id = $1',
+      [userId]
+    );
+    const user = userResult.rows[0];
+
+    // Get product names for email
+    const productIds = orderItems.map(item => item.product_id);
+    const productsResult = await pool.query(
+      `SELECT id, name FROM products WHERE id = ANY($1::int[])`,
+      [productIds]
+    );
+    const productsMap = new Map(productsResult.rows.map(p => [p.id, p.name]));
+
+    // Send order confirmation email
+    if (user.email) {
+      try {
+        await sendOrderConfirmationEmail({
+          orderNumber: order.order_number,
+          customerName: user.full_name || 'Khách hàng',
+          customerEmail: user.email,
+          orderDate: new Date(order.created_at).toLocaleString('vi-VN'),
+          totalAmount: parseFloat(order.total_amount),
+          shippingAddress: validated.shipping_address,
+          paymentMethod: validated.payment_method,
+          items: orderItems.map(item => ({
+            productName: productsMap.get(item.product_id) || 'Sản phẩm',
+            quantity: item.quantity,
+            price: item.price,
+          })),
+        });
+      } catch (error: any) {
+        // Log error but don't fail the request
+        console.error('Failed to send order confirmation email:', error);
+      }
     }
 
     res.status(201).json({

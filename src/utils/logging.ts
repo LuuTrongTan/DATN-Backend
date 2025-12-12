@@ -65,8 +65,13 @@ class LoggingConfig {
         const line = frame.getLineNumber();
         const func = frame.getFunctionName();
 
-        // Bỏ qua các file node_modules và winston internal
-        if (file && !file.includes('node_modules') && !file.includes('winston')) {
+        // Bỏ qua node internal, node_modules và winston internal
+        if (
+          file &&
+          !file.startsWith('node:') &&
+          !file.includes('node_modules') &&
+          !file.includes('winston')
+        ) {
           callerfile = file;
           callerline = line ?? undefined;
           callerfunction = func || 'anonymous';

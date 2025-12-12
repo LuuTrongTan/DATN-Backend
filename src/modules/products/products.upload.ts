@@ -29,3 +29,5 @@ export const productCreateMiddleware = productUpload.fields([
   { name: 'video_file', maxCount: 1 },
 ]);
 
+
+
