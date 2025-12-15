@@ -13,3 +13,4 @@ router.put('/alerts/:id/notify', authenticate, inventoryController.markAlertAsNo
 
 export default router;
 
+

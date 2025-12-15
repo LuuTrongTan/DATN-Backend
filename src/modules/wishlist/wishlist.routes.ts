@@ -11,3 +11,4 @@ router.get('/check/:product_id', authenticate, wishlistController.checkWishlist)
 
 export default router;
 
+

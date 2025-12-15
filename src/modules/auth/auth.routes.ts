@@ -50,5 +50,11 @@ router.delete('/account', authenticate, authController.deleteAccount);
 // Get current user
 router.get('/me', authenticate, authController.getCurrentUser);
 
+// Add Recovery Email (Thêm email để khôi phục tài khoản)
+router.post('/add-recovery-email', authenticate, authController.addRecoveryEmail);
+
+// Verify Recovery Email (Xác thực email recovery)
+router.post('/verify-recovery-email', authenticate, authController.verifyRecoveryEmail);
+
 export default router;
 

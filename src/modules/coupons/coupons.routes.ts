@@ -17,3 +17,4 @@ router.post('/apply', authenticate, couponsController.applyCoupon);
 
 export default router;
 
+

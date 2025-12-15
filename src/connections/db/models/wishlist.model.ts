@@ -9,3 +9,4 @@ export interface CreateWishlistItemInput {
   product_id: number;
 }
 
+

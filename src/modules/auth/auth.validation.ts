@@ -1,12 +1,16 @@
 import { z } from 'zod';
 
 // Validation schemas cho module Auth
+// UC-01: Đăng ký chỉ bằng số điện thoại (bắt buộc Firebase ID token)
 export const registerSchema = z.object({
-  email: z.string().email('Email không hợp lệ').optional(),
-  phone: z.string().regex(/^\d{11}$/, 'Số điện thoại phải có 11 chữ số').optional(),
+  phone: z.string().regex(/^\d{11}$/, 'Số điện thoại phải có 11 chữ số'),
   password: z.string().min(8, 'Mật khẩu phải có ít nhất 8 ký tự'),
-}).refine(data => data.email || data.phone, {
-  message: 'Phải cung cấp email hoặc số điện thoại',
+  idToken: z.string().min(1, 'Firebase ID token là bắt buộc để xác thực số điện thoại'),
+});
+
+// Schema để thêm email recovery vào tài khoản
+export const addRecoveryEmailSchema = z.object({
+  email: z.string().email('Email không hợp lệ'),
 });
 
 export const loginSchema = z.object({
@@ -17,14 +21,46 @@ export const loginSchema = z.object({
   message: 'Phải cung cấp email hoặc số điện thoại',
 });
 
-export const resetPasswordSchema = z.object({
-  code: z.string().min(1, 'Mã xác thực không được để trống'),
-  email: z.string().email().optional(),
-  phone: z.string().regex(/^\d{11}$/).optional(),
-  newPassword: z.string().min(8, 'Mật khẩu mới phải có ít nhất 8 ký tự'),
-  confirmPassword: z.string().min(8, 'Xác nhận mật khẩu phải có ít nhất 8 ký tự'),
+// Schema cho quên mật khẩu
+// Nếu dùng phone: phải có idToken + newPassword (Firebase Phone Auth - reset ngay)
+// Nếu dùng email: chỉ cần email (gửi code OTP)
+export const forgotPasswordSchema = z.object({
+  email: z.string().email('Email không hợp lệ').optional(),
+  phone: z.string().regex(/^\d{11}$/, 'Số điện thoại phải có 11 chữ số').optional(),
+  idToken: z.string().optional(), // Bắt buộc nếu dùng phone
+  newPassword: z.string().min(8, 'Mật khẩu mới phải có ít nhất 8 ký tự').optional(),
+  confirmPassword: z.string().min(8, 'Xác nhận mật khẩu phải có ít nhất 8 ký tự').optional(),
 }).refine(data => data.email || data.phone, {
   message: 'Phải cung cấp email hoặc số điện thoại',
+}).refine(data => {
+  // Nếu dùng phone thì phải có idToken và newPassword
+  if (data.phone && !data.idToken) {
+    return false;
+  }
+  if (data.phone && !data.newPassword) {
+    return false;
+  }
+  return true;
+}, {
+  message: 'Khi dùng số điện thoại, vui lòng cung cấp Firebase ID token và mật khẩu mới',
+  path: ['phone'],
+}).refine(data => {
+  // Nếu có newPassword thì phải có confirmPassword và khớp nhau
+  if (data.newPassword && (!data.confirmPassword || data.newPassword !== data.confirmPassword)) {
+    return false;
+  }
+  return true;
+}, {
+  message: 'Xác nhận mật khẩu không khớp',
+  path: ['confirmPassword'],
+});
+
+// Schema cho reset password với code OTP (chỉ dùng cho email)
+export const resetPasswordSchema = z.object({
+  code: z.string().min(1, 'Mã xác thực không được để trống'),
+  email: z.string().email('Email không hợp lệ'),
+  newPassword: z.string().min(8, 'Mật khẩu mới phải có ít nhất 8 ký tự'),
+  confirmPassword: z.string().min(8, 'Xác nhận mật khẩu phải có ít nhất 8 ký tự'),
 }).refine(data => data.newPassword === data.confirmPassword, {
   message: 'Xác nhận mật khẩu không khớp',
   path: ['confirmPassword'],
@@ -49,4 +85,5 @@ export const refreshTokenSchema = z.object({
 export const deleteAccountSchema = z.object({
   password: z.string().min(1, 'Mật khẩu không được để trống'),
 });
+
 

@@ -16,3 +16,4 @@ router.delete('/:id', authenticate, requireRole('admin', 'staff'), faqController
 
 export default router;
 
+

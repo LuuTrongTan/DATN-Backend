@@ -17,3 +17,4 @@ export interface CreateStockAlertInput {
   current_stock: number;
 }
 
+

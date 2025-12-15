@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-export const createCouponSchema = z.object({
+// Tách base schema để có thể dùng partial/omit mà không mất method
+const baseCouponSchema = z.object({
   code: z.string().min(3, 'Mã giảm giá phải có ít nhất 3 ký tự').max(50, 'Mã giảm giá không được quá 50 ký tự'),
   name: z.string().min(1, 'Tên mã giảm giá không được để trống'),
   description: z.string().optional(),
@@ -15,7 +16,9 @@ export const createCouponSchema = z.object({
   applicable_to: z.enum(['all', 'category', 'product']).optional().default('all'),
   category_id: z.number().int().positive().optional(),
   product_id: z.number().int().positive().optional(),
-}).refine((data) => {
+});
+
+export const createCouponSchema = baseCouponSchema.refine((data) => {
   if (data.applicable_to === 'category' && !data.category_id) {
     return false;
   }
@@ -27,7 +30,21 @@ export const createCouponSchema = z.object({
   message: 'Phải chọn category_id hoặc product_id khi applicable_to là category hoặc product',
 });
 
-export const updateCouponSchema = createCouponSchema.partial().omit({ code: true });
+export const updateCouponSchema = baseCouponSchema
+  .partial()
+  .omit({ code: true })
+  .refine((data) => {
+    // Nếu applicable_to được gửi lên cùng category/product thì phải khớp
+    if (data.applicable_to === 'category' && !data.category_id) {
+      return false;
+    }
+    if (data.applicable_to === 'product' && !data.product_id) {
+      return false;
+    }
+    return true;
+  }, {
+    message: 'Phải chọn category_id hoặc product_id khi applicable_to là category hoặc product',
+  });
 
 export const applyCouponSchema = z.object({
   code: z.string().min(1, 'Mã giảm giá không được để trống'),
@@ -35,4 +52,5 @@ export const applyCouponSchema = z.object({
   product_ids: z.array(z.number().int().positive()).optional(),
   category_ids: z.array(z.number().int().positive()).optional(),
 });
+
 

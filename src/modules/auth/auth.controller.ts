@@ -6,11 +6,13 @@ import { AuthRequest } from '../../types/request.types';
 import {
   registerSchema,
   loginSchema,
+  forgotPasswordSchema,
   resetPasswordSchema,
   updateProfileSchema,
   verifyPasswordSchema,
   refreshTokenSchema,
   deleteAccountSchema,
+  addRecoveryEmailSchema,
 } from './auth.validation';
 import {
   generateCode,
@@ -24,72 +26,145 @@ import { ResponseHandler } from '../../utils/response';
 import { logger, auditLog } from '../../utils/logging';
 import { LoginResponse, AuthResponse, RefreshTokenResponse } from '../../types/response.types';
 
-// UC-01: Đăng ký
+// UC-01: Đăng ký chỉ bằng số điện thoại (bắt buộc Firebase ID token)
 export const register = async (req: AuthRequest, res: Response) => {
   try {
     const validated = registerSchema.parse(req.body);
-    const { email, phone, password } = validated;
+    const { phone, password, idToken } = validated;
+
+    logger.info('[Register] Starting phone registration', {
+      phone,
+      hasIdToken: !!idToken,
+      ip: req.ip,
+    });
+
+    // Verify Firebase ID token (bắt buộc)
+    let verifiedPhone: string | null = null;
+    try {
+      logger.info('[Register] Verifying Firebase ID token...');
+      const decodedToken = await verifyFirebaseToken(idToken);
+
+      // Verify phone number matches
+      if (!decodedToken.phone_number) {
+        logger.warn('[Register] Firebase token does not contain phone number', { ip: req.ip });
+        return ResponseHandler.error(
+          res,
+          'Firebase token không chứa số điện thoại. Vui lòng xác thực số điện thoại trước.',
+          400
+        );
+      }
+
+      // Kiểm tra phone number trong token khớp với phone trong request
+      // Firebase trả về phone với format +84..., cần convert về 11 số
+      const tokenPhone = decodedToken.phone_number.replace(/^\+84/, '0');
+      if (tokenPhone !== phone) {
+        logger.warn('[Register] Phone number mismatch', {
+          tokenPhone,
+          providedPhone: phone,
+          ip: req.ip,
+        });
+        return ResponseHandler.error(
+          res,
+          'Số điện thoại không khớp với token Firebase',
+          400
+        );
+      }
+
+      verifiedPhone = phone;
+
+      logger.info('[Register] Firebase token verified successfully', {
+        phone: verifiedPhone,
+      });
+    } catch (firebaseError: any) {
+      logger.error('[Register] Firebase verification failed', {
+        error: firebaseError.message,
+        ip: req.ip,
+      });
+      return ResponseHandler.error(
+        res,
+        'Xác thực Firebase thất bại: ' + firebaseError.message,
+        400
+      );
+    }
 
     // Check if user already exists
     const existingUser = await pool.query(
-      'SELECT id FROM users WHERE email = $1 OR phone = $2',
-      [email, phone]
+      'SELECT id FROM users WHERE phone = $1',
+      [verifiedPhone]
     );
 
     if (existingUser.rows.length > 0) {
-      logger.warn('[Register] User already exists', { email, phone, ip: req.ip });
+      logger.warn('[Register] User already exists', { phone: verifiedPhone, ip: req.ip });
       return ResponseHandler.conflict(
         res,
-        'Email hoặc số điện thoại đã được đăng ký',
-        { suggestion: 'Vui lòng đăng nhập hoặc sử dụng email/số điện thoại khác' }
+        'Số điện thoại đã được đăng ký',
+        { suggestion: 'Vui lòng đăng nhập hoặc sử dụng số điện thoại khác' }
       );
     }
 
     // Hash password
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // Create user
+    // Create user với phone đã được verify qua Firebase
     const result = await pool.query(
       `INSERT INTO users (email, phone, password_hash, is_verified)
-       VALUES ($1, $2, $3, FALSE)
-       RETURNING id, email, phone, role`,
-      [email || null, phone || null, passwordHash]
+       VALUES (NULL, $1, $2, TRUE)
+       RETURNING id, email, phone, role, is_verified`,
+      [verifiedPhone, passwordHash]
     );
 
     const user = result.rows[0];
 
-    // Generate and send verification code
-    const code = generateCode();
-    const verificationType = email ? 'email_verification' : 'otp';
-    
-    await saveVerificationCode(user.id, code, verificationType, 10);
-
-    if (email) {
-      await sendVerificationEmail(email, code, 'verification');
-    } else if (phone) {
-      // With Firebase Phone Auth, SMS is sent from frontend
-      // Backend only verifies Firebase ID token
-      logger.info('[Register] Phone registration - Firebase Phone Auth should be used on frontend', { phone });
-    }
-
     auditLog('USER_REGISTERED', {
       userId: user.id,
-      email,
-      phone,
+      phone: verifiedPhone,
       ip: req.ip,
     });
 
-    logger.info('[Register] User registered successfully', { userId: user.id, email, phone });
+    logger.info('[Register] User registered successfully', {
+      userId: user.id,
+      phone: verifiedPhone,
+    });
 
-    return ResponseHandler.created(
+    // Generate JWT access token (phone đã verify nên trả token ngay)
+    const token = jwt.sign(
+      { userId: user.id, role: user.role },
+      appConfig.jwtSecret as string,
+      { expiresIn: appConfig.jwtExpiresIn } as any
+    );
+
+    // Generate refresh token
+    const refreshToken = jwt.sign(
+      { userId: user.id, role: user.role, type: 'refresh' },
+      appConfig.jwtSecret as string,
+      { expiresIn: '30d' } as any
+    );
+
+    const responseData: LoginResponse = {
+      token,
+      refreshToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+      },
+    };
+
+    return ResponseHandler.success(
       res,
-      { userId: user.id, email: user.email, phone: user.phone },
-      'Đăng ký thành công. Vui lòng xác thực tài khoản.'
+      responseData,
+      'Đăng ký thành công. Số điện thoại đã được xác thực.'
     );
   } catch (error: any) {
     if (error.name === 'ZodError') {
       return ResponseHandler.validationError(res, error.errors);
     }
+    logger.error('[Register] Registration error', {
+      error: error.message,
+      stack: error.stack,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi đăng ký', error);
   }
 };
@@ -219,50 +294,190 @@ export const verify = async (req: AuthRequest, res: Response) => {
 };
 
 // UC-04: Quên mật khẩu
+// - Nếu dùng phone: phải có idToken + newPassword → Reset password ngay (Firebase Phone Auth)
+// - Nếu dùng email: chỉ cần email → Gửi code OTP qua email
 export const forgotPassword = async (req: AuthRequest, res: Response) => {
   try {
-    const { email, phone } = req.body;
+    const validated = forgotPasswordSchema.parse(req.body);
+    const { email, phone, idToken, newPassword } = validated;
 
-    if (!email && !phone) {
-      return ResponseHandler.error(res, 'Phải cung cấp email hoặc số điện thoại', 400);
-    }
-
-    const result = await pool.query(
-      'SELECT id, email, phone FROM users WHERE email = $1 OR phone = $2',
-      [email, phone]
-    );
-
-    if (result.rows.length === 0) {
-      // Don't reveal that user doesn't exist for security
-      logger.warn('[ForgotPassword] User not found', { email, phone, ip: req.ip });
-      return ResponseHandler.success(res, null, 'Đã gửi mã đặt lại mật khẩu thành công');
-    }
-
-    const user = result.rows[0];
-
-    // Generate reset code
-    const code = generateCode();
-    await saveVerificationCode(user.id, code, 'password_reset', 5);
-
-    if (email) {
-      await sendVerificationEmail(email, code, 'password_reset');
-    } else if (phone) {
-      // With Firebase Phone Auth, SMS is sent from frontend
-      logger.info('[ForgotPassword] Phone reset - Firebase Phone Auth should be used on frontend', { phone });
-    }
-
-    auditLog('PASSWORD_RESET_REQUESTED', {
-      userId: user.id,
-      email,
-      phone,
+    logger.info('[ForgotPassword] Starting password recovery', {
+      hasEmail: !!email,
+      hasPhone: !!phone,
+      hasIdToken: !!idToken,
+      hasNewPassword: !!newPassword,
       ip: req.ip,
     });
 
-    logger.info('[ForgotPassword] Reset code sent successfully', { userId: user.id, email, phone });
+    // Trường hợp 1: Quên mật khẩu qua Phone với Firebase (reset ngay)
+    if (phone && idToken && newPassword) {
+      logger.info('[ForgotPassword] Using Firebase Phone Auth for password recovery');
 
-    return ResponseHandler.success(res, null, 'Đã gửi mã đặt lại mật khẩu thành công');
+      // Verify Firebase ID token
+      let verifiedPhone: string | null = null;
+      try {
+        logger.info('[ForgotPassword] Verifying Firebase ID token...');
+        const decodedToken = await verifyFirebaseToken(idToken);
+
+        // Verify phone number exists in token
+        if (!decodedToken.phone_number) {
+          logger.warn('[ForgotPassword] Firebase token does not contain phone number', { ip: req.ip });
+          return ResponseHandler.error(
+            res,
+            'Firebase token không chứa số điện thoại. Vui lòng xác thực số điện thoại trước.',
+            400
+          );
+        }
+
+        // Convert Firebase phone format (+84...) to local format (0...)
+        const tokenPhone = decodedToken.phone_number.replace(/^\+84/, '0');
+        if (tokenPhone !== phone) {
+          logger.warn('[ForgotPassword] Phone number mismatch', {
+            tokenPhone,
+            providedPhone: phone,
+            ip: req.ip,
+          });
+          return ResponseHandler.error(
+            res,
+            'Số điện thoại không khớp với token Firebase',
+            400
+          );
+        }
+
+        verifiedPhone = phone;
+
+        logger.info('[ForgotPassword] Firebase token verified successfully', {
+          phone: verifiedPhone,
+        });
+      } catch (firebaseError: any) {
+        logger.error('[ForgotPassword] Firebase verification failed', {
+          error: firebaseError.message,
+          ip: req.ip,
+        });
+        return ResponseHandler.error(
+          res,
+          'Xác thực Firebase thất bại: ' + firebaseError.message,
+          400
+        );
+      }
+
+      // Find user by phone
+      const userResult = await pool.query(
+        'SELECT id, email, phone, is_active, is_banned FROM users WHERE phone = $1',
+        [verifiedPhone]
+      );
+
+      if (userResult.rows.length === 0) {
+        // Don't reveal that user doesn't exist for security
+        logger.warn('[ForgotPassword] User not found', { phone: verifiedPhone, ip: req.ip });
+        return ResponseHandler.success(
+          res,
+          null,
+          'Nếu số điện thoại tồn tại trong hệ thống, mật khẩu đã được đặt lại thành công'
+        );
+      }
+
+      const user = userResult.rows[0];
+
+      // Check if account is active and not banned
+      if (!user.is_active || user.is_banned) {
+        logger.warn('[ForgotPassword] Account is inactive or banned', {
+          userId: user.id,
+          is_active: user.is_active,
+          is_banned: user.is_banned,
+          ip: req.ip,
+        });
+        return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
+      }
+
+      // Hash new password
+      const passwordHash = await bcrypt.hash(newPassword, 10);
+
+      // Update password
+      await pool.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [
+        passwordHash,
+        user.id,
+      ]);
+
+      auditLog('PASSWORD_RESET_BY_PHONE', {
+        userId: user.id,
+        phone: verifiedPhone,
+        ip: req.ip,
+      });
+
+      logger.info('[ForgotPassword] Password reset successfully via Firebase', {
+        userId: user.id,
+        phone: verifiedPhone,
+      });
+
+      return ResponseHandler.success(
+        res,
+        null,
+        'Đặt lại mật khẩu thành công. Vui lòng đăng nhập với mật khẩu mới.'
+      );
+    }
+
+    // Trường hợp 2: Quên mật khẩu qua Email (gửi code OTP)
+    if (email) {
+      logger.info('[ForgotPassword] Using email OTP for password recovery');
+
+      const result = await pool.query(
+        'SELECT id, email, phone FROM users WHERE email = $1',
+        [email]
+      );
+
+      if (result.rows.length === 0) {
+        // Don't reveal that user doesn't exist for security
+        logger.warn('[ForgotPassword] User not found', { email, ip: req.ip });
+        return ResponseHandler.success(res, null, 'Đã gửi mã đặt lại mật khẩu thành công');
+      }
+
+      const user = result.rows[0];
+
+      // Generate reset code
+      const code = generateCode();
+      await saveVerificationCode(user.id, code, 'password_reset', 5);
+
+      // Send verification email
+      try {
+        await sendVerificationEmail(email, code, 'password_reset');
+        logger.info('[ForgotPassword] Verification email sent', { userId: user.id, email });
+      } catch (emailError: any) {
+        logger.error('[ForgotPassword] Failed to send verification email', {
+          userId: user.id,
+          email,
+          error: emailError.message,
+        });
+        return ResponseHandler.error(
+          res,
+          'Không thể gửi email xác thực. Vui lòng thử lại sau.',
+          500
+        );
+      }
+
+      auditLog('PASSWORD_RESET_REQUESTED', {
+        userId: user.id,
+        email,
+        ip: req.ip,
+      });
+
+      logger.info('[ForgotPassword] Reset code sent successfully via email', { userId: user.id, email });
+
+      return ResponseHandler.success(res, null, 'Đã gửi mã đặt lại mật khẩu đến email của bạn');
+    }
+
+    // Nếu không có email hoặc phone hợp lệ
+    return ResponseHandler.error(res, 'Phải cung cấp email hoặc số điện thoại với Firebase ID token', 400);
   } catch (error: any) {
-    return ResponseHandler.internalError(res, 'Lỗi khi gửi mã đặt lại mật khẩu', error);
+    if (error.name === 'ZodError') {
+      return ResponseHandler.validationError(res, error.errors);
+    }
+    logger.error('[ForgotPassword] Password recovery error', {
+      error: error.message,
+      stack: error.stack,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi xử lý quên mật khẩu', error);
   }
 };
 
@@ -432,20 +647,22 @@ export const getCurrentUser = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Reset Password (sau khi có code từ forgot-password)
+// Reset Password (chỉ dùng cho email recovery với code OTP)
 export const resetPassword = async (req: AuthRequest, res: Response) => {
   try {
     const validated = resetPasswordSchema.parse(req.body);
-    const { code, email, phone, newPassword } = validated;
+    const { code, email, newPassword } = validated;
 
-    // Find user
+    logger.info('[ResetPassword] Resetting password with OTP code', { email, ip: req.ip });
+
+    // Find user by email
     const userResult = await pool.query(
-      'SELECT id FROM users WHERE email = $1 OR phone = $2',
-      [email, phone]
+      'SELECT id FROM users WHERE email = $1',
+      [email]
     );
 
     if (userResult.rows.length === 0) {
-      logger.warn('[ResetPassword] User not found', { email, phone, ip: req.ip });
+      logger.warn('[ResetPassword] User not found', { email, ip: req.ip });
       return ResponseHandler.notFound(res, 'Tài khoản không tồn tại');
     }
 
@@ -455,7 +672,7 @@ export const resetPassword = async (req: AuthRequest, res: Response) => {
     const isValid = await verifyCode(userId, code, 'password_reset');
 
     if (!isValid) {
-      logger.warn('[ResetPassword] Invalid code', { userId, email, phone, ip: req.ip });
+      logger.warn('[ResetPassword] Invalid code', { userId, email, ip: req.ip });
       return ResponseHandler.error(
         res,
         'Mã xác thực không đúng hoặc đã hết hạn',
@@ -468,25 +685,29 @@ export const resetPassword = async (req: AuthRequest, res: Response) => {
     const passwordHash = await bcrypt.hash(newPassword, 10);
 
     // Update password
-    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [
+    await pool.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [
       passwordHash,
       userId,
     ]);
 
-    auditLog('PASSWORD_RESET', {
+    auditLog('PASSWORD_RESET_BY_EMAIL', {
       userId,
       email,
-      phone,
       ip: req.ip,
     });
 
-    logger.info('[ResetPassword] Password reset successfully', { userId, email, phone });
+    logger.info('[ResetPassword] Password reset successfully', { userId, email });
 
     return ResponseHandler.success(res, null, 'Đặt lại mật khẩu thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
       return ResponseHandler.validationError(res, error.errors);
     }
+    logger.error('[ResetPassword] Password reset error', {
+      error: error.message,
+      stack: error.stack,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi đặt lại mật khẩu', error);
   }
 };
@@ -915,6 +1136,172 @@ export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi xác thực số điện thoại', error);
+  }
+};
+
+// Add Recovery Email (Thêm email để khôi phục tài khoản)
+export const addRecoveryEmail = async (req: AuthRequest, res: Response) => {
+  try {
+    const validated = addRecoveryEmailSchema.parse(req.body);
+    const { email } = validated;
+    const userId = req.user!.id;
+
+    logger.info('[AddRecoveryEmail] Adding recovery email', { userId, email, ip: req.ip });
+
+    // Check if email is already taken by another user
+    const existingUser = await pool.query(
+      'SELECT id FROM users WHERE email = $1 AND id != $2',
+      [email, userId]
+    );
+
+    if (existingUser.rows.length > 0) {
+      logger.warn('[AddRecoveryEmail] Email already taken', { userId, email });
+      return ResponseHandler.conflict(
+        res,
+        'Email đã được sử dụng bởi tài khoản khác'
+      );
+    }
+
+    // Check if current user already has this email
+    const currentUser = await pool.query(
+      'SELECT email FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (currentUser.rows.length > 0 && currentUser.rows[0].email === email) {
+      return ResponseHandler.error(
+        res,
+        'Email này đã được liên kết với tài khoản của bạn',
+        400
+      );
+    }
+
+    // Generate verification code
+    const code = generateCode();
+    await saveVerificationCode(userId, code, 'email_recovery', 10);
+
+    // Send verification email
+    try {
+      await sendVerificationEmail(email, code, 'verification');
+      logger.info('[AddRecoveryEmail] Verification email sent', { userId, email });
+    } catch (emailError: any) {
+      logger.error('[AddRecoveryEmail] Failed to send verification email', {
+        userId,
+        email,
+        error: emailError.message,
+      });
+      return ResponseHandler.error(
+        res,
+        'Không thể gửi email xác thực. Vui lòng kiểm tra lại địa chỉ email.',
+        500
+      );
+    }
+
+    auditLog('RECOVERY_EMAIL_ADDED', {
+      userId,
+      email,
+      ip: req.ip,
+    });
+
+    logger.info('[AddRecoveryEmail] Recovery email verification code sent', { userId, email });
+
+    return ResponseHandler.success(
+      res,
+      { email },
+      'Đã gửi mã xác thực đến email. Vui lòng kiểm tra email và xác thực để hoàn tất.'
+    );
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return ResponseHandler.validationError(res, error.errors);
+    }
+    logger.error('[AddRecoveryEmail] Error adding recovery email', {
+      error: error.message,
+      stack: error.stack,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi thêm email khôi phục', error);
+  }
+};
+
+// Verify Recovery Email (Xác thực email recovery và cập nhật vào tài khoản)
+export const verifyRecoveryEmail = async (req: AuthRequest, res: Response) => {
+  try {
+    const { code, email } = req.body;
+    const userId = req.user!.id;
+
+    if (!code || !email) {
+      return ResponseHandler.error(
+        res,
+        'Mã xác thực và email không được để trống',
+        400
+      );
+    }
+
+    logger.info('[VerifyRecoveryEmail] Verifying recovery email', { userId, email, ip: req.ip });
+
+    // Verify code
+    const isValid = await verifyCode(userId, code, 'email_recovery');
+
+    if (!isValid) {
+      logger.warn('[VerifyRecoveryEmail] Invalid code', { userId, email, ip: req.ip });
+      return ResponseHandler.error(
+        res,
+        'Mã xác thực không đúng hoặc đã hết hạn',
+        400,
+        { code: 'INVALID_CODE', details: { suggestion: 'Vui lòng yêu cầu gửi lại mã xác thực' } }
+      );
+    }
+
+    // Check if email is already taken by another user
+    const existingUser = await pool.query(
+      'SELECT id FROM users WHERE email = $1 AND id != $2',
+      [email, userId]
+    );
+
+    if (existingUser.rows.length > 0) {
+      logger.warn('[VerifyRecoveryEmail] Email already taken', { userId, email });
+      return ResponseHandler.conflict(
+        res,
+        'Email đã được sử dụng bởi tài khoản khác'
+      );
+    }
+
+    // Update user email
+    await pool.query(
+      'UPDATE users SET email = $1, updated_at = NOW() WHERE id = $2',
+      [email, userId]
+    );
+
+    auditLog('RECOVERY_EMAIL_VERIFIED', {
+      userId,
+      email,
+      ip: req.ip,
+    });
+
+    logger.info('[VerifyRecoveryEmail] Recovery email verified and updated', { userId, email });
+
+    // Get updated user info
+    const userResult = await pool.query(
+      'SELECT id, email, phone, full_name, role FROM users WHERE id = $1',
+      [userId]
+    );
+
+    const responseData: AuthResponse = {
+      user: userResult.rows[0],
+    };
+
+    return ResponseHandler.success(
+      res,
+      responseData,
+      'Email khôi phục đã được xác thực và cập nhật thành công'
+    );
+  } catch (error: any) {
+    logger.error('[VerifyRecoveryEmail] Error verifying recovery email', {
+      error: error.message,
+      stack: error.stack,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi xác thực email khôi phục', error);
   }
 };
 

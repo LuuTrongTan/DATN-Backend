@@ -26,7 +26,7 @@ const transporter = nodemailer.createTransport({
 export const saveVerificationCode = async (
   userId: number,
   code: string,
-  type: 'email_verification' | 'password_reset' | 'otp',
+  type: 'email_verification' | 'password_reset' | 'otp' | 'email_recovery',
   expiresInMinutes: number = 10
 ): Promise<void> => {
   const expiresAt = new Date();

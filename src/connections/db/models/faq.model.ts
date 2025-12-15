@@ -26,3 +26,4 @@ export interface UpdateFAQInput {
   is_active?: boolean;
 }
 
+

@@ -24,3 +24,4 @@ export interface CreateStockHistoryInput {
   created_by?: number;
 }
 
+

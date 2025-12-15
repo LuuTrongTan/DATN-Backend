@@ -213,3 +213,4 @@ export const deleteFAQ = async (req: AuthRequest, res: Response) => {
   }
 };
 
+
