@@ -9,7 +9,8 @@ export const migration: Migration = {
         category_id INTEGER REFERENCES categories(id),
         name VARCHAR(255) NOT NULL,
         description TEXT,
-        price DECIMAL(10, 2) NOT NULL,
+        -- Sử dụng INTEGER để lưu số tiền theo đơn vị VND, tránh DECIMAL trả về dạng string
+        price INTEGER NOT NULL,
         stock_quantity INTEGER DEFAULT 0,
         image_urls TEXT[],
         video_url VARCHAR(500),

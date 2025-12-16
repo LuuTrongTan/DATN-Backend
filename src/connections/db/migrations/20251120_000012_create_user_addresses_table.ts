@@ -8,7 +8,7 @@ export const migration: Migration = {
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
         full_name VARCHAR(255) NOT NULL,
-        phone VARCHAR(11) NOT NULL,
+        phone VARCHAR(10) NOT NULL,
         province VARCHAR(100) NOT NULL,
         district VARCHAR(100) NOT NULL,
         ward VARCHAR(100) NOT NULL,

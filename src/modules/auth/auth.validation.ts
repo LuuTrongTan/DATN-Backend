@@ -3,7 +3,7 @@ import { z } from 'zod';
 // Validation schemas cho module Auth
 // UC-01: Đăng ký chỉ bằng số điện thoại (bắt buộc Firebase ID token)
 export const registerSchema = z.object({
-  phone: z.string().regex(/^\d{11}$/, 'Số điện thoại phải có 11 chữ số'),
+  phone: z.string().regex(/^\d{10}$/, 'Số điện thoại phải có 10 chữ số'),
   password: z.string().min(8, 'Mật khẩu phải có ít nhất 8 ký tự'),
   idToken: z.string().min(1, 'Firebase ID token là bắt buộc để xác thực số điện thoại'),
 });
@@ -15,7 +15,7 @@ export const addRecoveryEmailSchema = z.object({
 
 export const loginSchema = z.object({
   email: z.string().email().optional(),
-  phone: z.string().regex(/^\d{11}$/).optional(),
+  phone: z.string().regex(/^\d{10}$/).optional(),
   password: z.string().min(1, 'Mật khẩu không được để trống'),
 }).refine(data => data.email || data.phone, {
   message: 'Phải cung cấp email hoặc số điện thoại',
@@ -26,7 +26,7 @@ export const loginSchema = z.object({
 // Nếu dùng email: chỉ cần email (gửi code OTP)
 export const forgotPasswordSchema = z.object({
   email: z.string().email('Email không hợp lệ').optional(),
-  phone: z.string().regex(/^\d{11}$/, 'Số điện thoại phải có 11 chữ số').optional(),
+  phone: z.string().regex(/^\d{10}$/, 'Số điện thoại phải có 10 chữ số').optional(),
   idToken: z.string().optional(), // Bắt buộc nếu dùng phone
   newPassword: z.string().min(8, 'Mật khẩu mới phải có ít nhất 8 ký tự').optional(),
   confirmPassword: z.string().min(8, 'Xác nhận mật khẩu phải có ít nhất 8 ký tự').optional(),
@@ -69,7 +69,7 @@ export const resetPasswordSchema = z.object({
 export const updateProfileSchema = z.object({
   full_name: z.string().min(1, 'Họ tên không được để trống').optional(),
   email: z.string().email('Email không hợp lệ').optional(),
-  phone: z.string().regex(/^\d{11}$/, 'Số điện thoại phải có 11 chữ số').optional(),
+  phone: z.string().regex(/^\d{10}$/, 'Số điện thoại phải có 10 chữ số').optional(),
 }).refine(data => data.email || data.phone || data.full_name, {
   message: 'Phải cung cấp ít nhất một trường để cập nhật',
 });

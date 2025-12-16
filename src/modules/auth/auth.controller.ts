@@ -55,7 +55,7 @@ export const register = async (req: AuthRequest, res: Response) => {
       }
 
       // Kiểm tra phone number trong token khớp với phone trong request
-      // Firebase trả về phone với format +84..., cần convert về 11 số
+      // Firebase trả về phone với format +84..., cần convert về 10 số
       const tokenPhone = decodedToken.phone_number.replace(/^\+84/, '0');
       if (tokenPhone !== phone) {
         logger.warn('[Register] Phone number mismatch', {

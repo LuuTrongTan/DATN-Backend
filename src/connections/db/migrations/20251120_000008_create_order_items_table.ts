@@ -10,7 +10,8 @@ export const migration: Migration = {
         product_id INTEGER REFERENCES products(id),
         variant_id INTEGER REFERENCES product_variants(id),
         quantity INTEGER NOT NULL,
-        price DECIMAL(10, 2) NOT NULL,
+        -- Lưu đơn giá theo VND, kiểu INTEGER để đồng bộ với products.price
+        price INTEGER NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);

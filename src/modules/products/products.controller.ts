@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { productSchema } from './products.validation';
+import { ResponseHandler } from '../../utils/response';
 
 // UC-07: Tìm kiếm và lọc sản phẩm
 export const searchProducts = async (req: AuthRequest, res: Response) => {
@@ -9,10 +10,18 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
     const { q, category_id, min_price, max_price, page = 1, limit = 20 } = req.query;
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
+    const userId = req.user?.id || null;
 
-    let query = 'SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = TRUE';
-    const params: any[] = [];
-    let paramCount = 0;
+    const baseQuery =
+      'FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = TRUE';
+
+    let query =
+      'SELECT p.*, c.name as category_name, ' +
+      'CASE WHEN $1::int IS NULL THEN false ELSE EXISTS (SELECT 1 FROM wishlist w WHERE w.user_id = $1 AND w.product_id = p.id) END as is_in_wishlist ' +
+      baseQuery;
+
+    const params: any[] = [userId];
+    let paramCount = 1;
 
     if (q) {
       paramCount++;
@@ -61,8 +70,8 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
 
     const result = await pool.query(query, params);
 
-    res.json({
-      products: result.rows,
+    return ResponseHandler.success(res, {
+      data: result.rows,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -71,7 +80,7 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, error.message || 'Lỗi tìm kiếm sản phẩm');
   }
 };
 
@@ -81,31 +90,39 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
     const { page = 1, limit = 20 } = req.query;
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
+    const userId = req.user?.id || null;
 
     const result = await pool.query(
-      `SELECT p.*, c.name as category_name
+      `SELECT p.*,
+              c.name as category_name,
+              CASE WHEN $3::int IS NULL THEN false
+                   ELSE EXISTS (
+                     SELECT 1 FROM wishlist w
+                     WHERE w.user_id = $3 AND w.product_id = p.id
+                   )
+              END as is_in_wishlist
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
        WHERE p.is_active = TRUE
        ORDER BY p.created_at DESC
        LIMIT $1 OFFSET $2`,
-      [limitNum, (pageNum - 1) * limitNum]
+      [limitNum, (pageNum - 1) * limitNum, userId]
     );
 
     const countResult = await pool.query('SELECT COUNT(*) FROM products WHERE is_active = TRUE');
     const total = parseInt(countResult.rows[0].count);
 
-    res.json({
-      products: result.rows,
+    return ResponseHandler.success(res, {
+      data: result.rows,
       pagination: {
-        page: parseInt(page as string),
-        limit: parseInt(limit as string),
+        page: pageNum,
+        limit: limitNum,
         total,
-        totalPages: Math.ceil(total / parseInt(limit as string)),
+        totalPages: Math.ceil(total / limitNum),
       },
     });
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, error.message || 'Lỗi lấy danh sách sản phẩm');
   }
 };
 
@@ -149,9 +166,17 @@ export const getCategoryById = async (req: AuthRequest, res: Response) => {
 export const getProductById = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
+    const userId = req.user?.id || null;
 
     const result = await pool.query(
-      `SELECT p.*, c.name as category_name,
+      `SELECT p.*,
+       c.name as category_name,
+       CASE WHEN $2::int IS NULL THEN false
+            ELSE EXISTS (
+              SELECT 1 FROM wishlist w
+              WHERE w.user_id = $2 AND w.product_id = p.id
+            )
+       END as is_in_wishlist,
        (SELECT json_agg(json_build_object(
          'id', pv.id,
          'variant_type', pv.variant_type,
@@ -162,16 +187,16 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
        WHERE p.id = $1`,
-      [id]
+      [id, userId]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Sản phẩm không tồn tại' });
+      return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
     }
 
-    res.json({ product: result.rows[0] });
+    return ResponseHandler.success(res, result.rows[0]);
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    return ResponseHandler.internalError(res, error.message || 'Lỗi lấy chi tiết sản phẩm');
   }
 };
 

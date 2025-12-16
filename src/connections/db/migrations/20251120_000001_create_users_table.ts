@@ -8,7 +8,7 @@ export const migration: Migration = {
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE,
-        phone VARCHAR(11) UNIQUE,
+        phone VARCHAR(10) UNIQUE,
         password_hash VARCHAR(255) NOT NULL,
         full_name VARCHAR(255),
         is_verified BOOLEAN DEFAULT FALSE,

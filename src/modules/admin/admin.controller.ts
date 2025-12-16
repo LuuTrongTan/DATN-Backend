@@ -181,8 +181,8 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ message: 'Email không hợp lệ' });
     }
 
-    if (phone && phone.length !== 11) {
-      return res.status(400).json({ message: 'Số điện thoại phải có 11 chữ số' });
+    if (phone && phone.length !== 10) {
+      return res.status(400).json({ message: 'Số điện thoại phải có 10 chữ số' });
     }
 
     // Check if user exists
