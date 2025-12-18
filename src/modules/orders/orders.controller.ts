@@ -4,6 +4,9 @@ import { pool } from '../../connections';
 import { orderSchema } from './orders.validation';
 import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../../utils/email.service';
 import { createShippingRecord } from '../shipping/shipping.service';
+import { ResponseHandler } from '../../utils/response';
+import { logger } from '../../utils/logging';
+import { appConfig } from '../../connections/config/app.config';
 
 // UC-12: Đặt hàng
 export const createOrder = async (req: AuthRequest, res: Response) => {
@@ -23,7 +26,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     );
 
     if (cartItems.rows.length === 0) {
-      return res.status(400).json({ message: 'Giỏ hàng trống' });
+      return ResponseHandler.error(res, 'Giỏ hàng trống', 400);
     }
 
     // Check stock and calculate total
@@ -34,9 +37,9 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       const availableStock = item.variant_id ? item.variant_stock : item.product_stock;
       
       if (item.quantity > availableStock) {
-        return res.status(400).json({
-          message: `Sản phẩm ${item.product_id} không đủ số lượng`,
-          available: availableStock,
+        return ResponseHandler.error(res, `Sản phẩm ${item.product_id} không đủ số lượng`, 400, {
+          code: 'INSUFFICIENT_STOCK',
+          details: { productId: item.product_id, available: availableStock, requested: item.quantity },
         });
       }
 
@@ -52,248 +55,174 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Apply coupon if provided
-    let discountAmount = 0;
-    let couponId: number | null = null;
-    
-    if (validated.coupon_code) {
-      try {
-        const productIds = orderItems.map(item => item.product_id);
-        const categoryIds = orderItems
-          .map(item => item.product_id)
-          .filter((id, index, self) => self.indexOf(id) === index); // Get unique product IDs
-        
-        // Get categories for products
-        const categoryResult = await pool.query(
-          `SELECT DISTINCT category_id FROM products WHERE id = ANY($1::int[]) AND category_id IS NOT NULL`,
-          [productIds]
-        );
-        const categoryIdsFromProducts = categoryResult.rows.map(r => r.category_id);
-
-        const couponResponse = await pool.query(
-          `SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE`,
-          [validated.coupon_code.toUpperCase()]
-        );
-
-        if (couponResponse.rows.length > 0) {
-          const coupon = couponResponse.rows[0];
-          const now = new Date();
-          const startDate = new Date(coupon.start_date);
-          const endDate = new Date(coupon.end_date);
-
-          if (now >= startDate && now <= endDate) {
-            if (!coupon.usage_limit || coupon.used_count < coupon.usage_limit) {
-              const userUsageCount = await pool.query(
-                'SELECT COUNT(*) FROM coupon_usage WHERE coupon_id = $1 AND user_id = $2',
-                [coupon.id, userId]
-              );
-
-              if (parseInt(userUsageCount.rows[0].count) < coupon.user_limit) {
-                if (totalAmount >= coupon.min_order_amount) {
-                  // Check applicable to
-                  let isApplicable = true;
-                  if (coupon.applicable_to === 'category' && coupon.category_id) {
-                    isApplicable = categoryIdsFromProducts.includes(coupon.category_id);
-                  } else if (coupon.applicable_to === 'product' && coupon.product_id) {
-                    isApplicable = productIds.includes(coupon.product_id);
-                  }
-
-                  if (isApplicable) {
-                    // Calculate discount
-                    if (coupon.discount_type === 'percentage') {
-                      discountAmount = (totalAmount * coupon.discount_value) / 100;
-                      if (coupon.max_discount_amount && discountAmount > coupon.max_discount_amount) {
-                        discountAmount = coupon.max_discount_amount;
-                      }
-                    } else {
-                      discountAmount = coupon.discount_value;
-                    }
-
-                    if (discountAmount > totalAmount) {
-                      discountAmount = totalAmount;
-                    }
-
-                    couponId = coupon.id;
-                  }
-                }
-              }
-            }
-          }
-        }
-      } catch (error) {
-        // Silent fail, continue without coupon
-        console.error('Error applying coupon:', error);
-      }
-    }
 
     // Calculate shipping fee (simplified - will be replaced by shipping service)
-    const shippingFee = validated.shipping_fee || 30000; // Default 30k
+    const defaultShippingFee = parseInt(process.env.DEFAULT_SHIPPING_FEE || '30000');
+    const shippingFee = validated.shipping_fee || defaultShippingFee;
 
-    // Create order
+    // Create order with transaction
     const orderNumber = `ORD-${Date.now()}-${userId}`;
-    const finalAmount = totalAmount - discountAmount + shippingFee;
+    const finalAmount = totalAmount + shippingFee;
     
-    const orderResult = await pool.query(
-      `INSERT INTO orders (user_id, order_number, total_amount, shipping_address, 
-        payment_method, shipping_fee, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
-      [
-        userId,
-        orderNumber,
-        finalAmount,
-        validated.shipping_address,
-        validated.payment_method,
-        shippingFee,
-        validated.notes || null,
-      ]
-    );
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-    const order = orderResult.rows[0];
-
-    // Create order items and update stock
-    for (const item of orderItems) {
-      await pool.query(
-        `INSERT INTO order_items (order_id, product_id, variant_id, quantity, price)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [order.id, item.product_id, item.variant_id, item.quantity, item.price]
-      );
-
-      // Get current stock before update
-      let currentStock: number;
-      if (item.variant_id) {
-        const stockResult = await pool.query(
-          'SELECT stock_quantity FROM product_variants WHERE id = $1',
-          [item.variant_id]
-        );
-        currentStock = parseInt(stockResult.rows[0].stock_quantity);
-      } else {
-        const stockResult = await pool.query(
-          'SELECT stock_quantity FROM products WHERE id = $1',
-          [item.product_id]
-        );
-        currentStock = parseInt(stockResult.rows[0].stock_quantity);
-      }
-
-      const newStock = currentStock - item.quantity;
-
-      // Update stock (will be finalized after payment confirmation)
-      if (item.variant_id) {
-        await pool.query(
-          'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2',
-          [newStock, item.variant_id]
-        );
-      } else {
-        await pool.query(
-          'UPDATE products SET stock_quantity = $1 WHERE id = $2',
-          [newStock, item.product_id]
-        );
-      }
-
-      // Create stock history
-      await pool.query(
-        `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
-         VALUES ($1, $2, 'out', $3, $4, $5, $6, $7)`,
+      // Create order
+      const orderResult = await client.query(
+        `INSERT INTO orders (user_id, order_number, total_amount, shipping_address, 
+          payment_method, shipping_fee, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, user_id, order_number, total_amount, order_status, payment_status, shipping_address, payment_method, shipping_fee, notes, created_at, updated_at`,
         [
-          item.product_id,
-          item.variant_id || null,
-          item.quantity,
-          currentStock,
-          newStock,
-          `Đơn hàng #${order.order_number}`,
           userId,
+          orderNumber,
+          finalAmount,
+          validated.shipping_address,
+          validated.payment_method,
+          shippingFee,
+          validated.notes || null,
         ]
       );
-    }
 
-    // Record coupon usage if applied
-    if (couponId && discountAmount > 0) {
-      await pool.query(
-        `INSERT INTO coupon_usage (coupon_id, user_id, order_id, discount_amount)
-         VALUES ($1, $2, $3, $4)`,
-        [couponId, userId, order.id, discountAmount]
-      );
+      const order = orderResult.rows[0];
 
-      // Update coupon used count
-      await pool.query(
-        'UPDATE coupons SET used_count = used_count + 1 WHERE id = $1',
-        [couponId]
-      );
-    }
+      // Create order items and update stock
+      for (const item of orderItems) {
+        await client.query(
+          `INSERT INTO order_items (order_id, product_id, variant_id, quantity, price)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [order.id, item.product_id, item.variant_id, item.quantity, item.price]
+        );
 
-    // Create shipping record
-    try {
-      await createShippingRecord(pool, {
-        order_id: order.id,
-        shipping_fee: shippingFee,
-        shipping_provider: 'GHTK',
-      });
-    } catch (error) {
-      // Log error but don't fail order creation
-      console.error('Error creating shipping record:', error);
-    }
+        // Get current stock before update
+        let currentStock: number;
+        if (item.variant_id) {
+          const stockResult = await client.query(
+            'SELECT stock_quantity FROM product_variants WHERE id = $1',
+            [item.variant_id]
+          );
+          currentStock = parseInt(stockResult.rows[0].stock_quantity);
+        } else {
+          const stockResult = await client.query(
+            'SELECT stock_quantity FROM products WHERE id = $1',
+            [item.product_id]
+          );
+          currentStock = parseInt(stockResult.rows[0].stock_quantity);
+        }
 
-    // Clear cart
-    await pool.query('DELETE FROM cart_items WHERE user_id = $1', [userId]);
+        const newStock = currentStock - item.quantity;
+
+        // Update stock (will be finalized after payment confirmation)
+        if (item.variant_id) {
+          await client.query(
+            'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2',
+            [newStock, item.variant_id]
+          );
+        } else {
+          await client.query(
+            'UPDATE products SET stock_quantity = $1 WHERE id = $2',
+            [newStock, item.product_id]
+          );
+        }
+
+        // Create stock history
+        await client.query(
+          `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
+           VALUES ($1, $2, 'out', $3, $4, $5, $6, $7)`,
+          [
+            item.product_id,
+            item.variant_id || null,
+            item.quantity,
+            currentStock,
+            newStock,
+            `Đơn hàng #${order.order_number}`,
+            userId,
+          ]
+        );
+      }
+
+      // Clear cart
+      await client.query('DELETE FROM cart_items WHERE user_id = $1', [userId]);
+
+      await client.query('COMMIT');
+
+      // Create shipping record (outside transaction - non-critical)
+      try {
+        await createShippingRecord(pool, {
+          order_id: order.id,
+          shipping_fee: shippingFee,
+          shipping_provider: 'GHTK',
+        });
+      } catch (error) {
+        // Log error but don't fail order creation
+        logger.error('Error creating shipping record', error instanceof Error ? error : new Error(String(error)), {
+          orderId: order.id,
+          orderNumber: order.order_number,
+        });
+      }
 
     // Handle payment
     // For online payment, return payment URL in response
     // For COD, order is already created with pending payment status
 
-    // Get user info for email
-    const userResult = await pool.query(
-      'SELECT email, full_name FROM users WHERE id = $1',
-      [userId]
-    );
-    const user = userResult.rows[0];
+      // Get user info for email
+      const userResult = await pool.query(
+        'SELECT email, full_name FROM users WHERE id = $1',
+        [userId]
+      );
+      const user = userResult.rows[0];
 
-    // Get product names for email
-    const productIds = orderItems.map(item => item.product_id);
-    const productsResult = await pool.query(
-      `SELECT id, name FROM products WHERE id = ANY($1::int[])`,
-      [productIds]
-    );
-    const productsMap = new Map(productsResult.rows.map(p => [p.id, p.name]));
+      // Get product names for email
+      const productIds = orderItems.map(item => item.product_id);
+      const productsResult = await pool.query(
+        `SELECT id, name FROM products WHERE id = ANY($1::int[])`,
+        [productIds]
+      );
+      const productsMap = new Map(productsResult.rows.map(p => [p.id, p.name]));
 
-    // Send order confirmation email
-    if (user.email) {
-      try {
-        await sendOrderConfirmationEmail({
-          orderNumber: order.order_number,
-          customerName: user.full_name || 'Khách hàng',
-          customerEmail: user.email,
-          orderDate: new Date(order.created_at).toLocaleString('vi-VN'),
-          totalAmount: parseFloat(order.total_amount),
-          shippingAddress: validated.shipping_address,
-          paymentMethod: validated.payment_method,
-          items: orderItems.map(item => ({
-            productName: productsMap.get(item.product_id) || 'Sản phẩm',
-            quantity: item.quantity,
-            price: item.price,
-          })),
-        });
-      } catch (error: any) {
-        // Log error but don't fail the request
-        console.error('Failed to send order confirmation email:', error);
+      // Send order confirmation email
+      if (user.email) {
+        try {
+          await sendOrderConfirmationEmail({
+            orderNumber: order.order_number,
+            customerName: user.full_name || 'Khách hàng',
+            customerEmail: user.email,
+            orderDate: new Date(order.created_at).toLocaleString('vi-VN'),
+            totalAmount: parseFloat(order.total_amount),
+            shippingAddress: validated.shipping_address,
+            paymentMethod: validated.payment_method,
+            items: orderItems.map(item => ({
+              productName: productsMap.get(item.product_id) || 'Sản phẩm',
+              quantity: item.quantity,
+              price: item.price,
+            })),
+          });
+        } catch (error: any) {
+          // Log error but don't fail the request
+          logger.error('Failed to send order confirmation email', error instanceof Error ? error : new Error(String(error)), {
+            orderId: order.id,
+            orderNumber: order.order_number,
+            email: user.email,
+          });
+        }
       }
-    }
 
-    // Prepare response
-    const response: any = {
-      message: 'Đặt hàng thành công',
-      order: {
-        ...order,
-        items: orderItems,
-      },
-    };
+      // Prepare response
+      const responseData: any = {
+        order: {
+          ...order,
+          items: orderItems,
+        },
+      };
 
-    // If online payment, create payment URL
-    if (validated.payment_method === 'online') {
-      try {
-        const { createPaymentUrl } = require('../payment/vnpay.service');
-        const paymentUrl = createPaymentUrl(
-          order.id,
-          order.order_number,
+      // If online payment, create payment URL
+      if (validated.payment_method === 'online') {
+        try {
+          const { createPaymentUrl } = require('../payment/vnpay.service');
+          const paymentUrl = createPaymentUrl(
+            order.id,
+            order.order_number,
           parseFloat(finalAmount.toString()),
           `Thanh toan don hang ${order.order_number}`,
           'other',
@@ -301,24 +230,34 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
           req.ip || '127.0.0.1'
         );
 
-        if (paymentUrl) {
-          response.payment_url = paymentUrl;
+          if (paymentUrl) {
+            responseData.payment_url = paymentUrl;
+          }
+        } catch (error) {
+          // VNPay not configured, continue without payment URL
+          logger.error('Error creating payment URL', error instanceof Error ? error : new Error(String(error)), {
+            orderId: order.id,
+            orderNumber: order.order_number,
+          });
         }
-      } catch (error) {
-        // VNPay not configured, continue without payment URL
-        console.error('Error creating payment URL:', error);
       }
-    }
 
-    res.status(201).json(response);
+      return ResponseHandler.created(res, responseData, 'Đặt hàng thành công');
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return res.status(400).json({
-        message: 'Dữ liệu không hợp lệ',
-        errors: error.errors,
-      });
+      return ResponseHandler.validationError(res, error.errors);
     }
-    res.status(500).json({ message: error.message });
+    logger.error('Error creating order', error instanceof Error ? error : new Error(String(error)), {
+      userId,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, error.message || 'Lỗi khi đặt hàng', error);
   }
 };
 
@@ -350,9 +289,13 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
 
     const result = await pool.query(query, params);
 
-    res.json({ orders: result.rows });
+    return ResponseHandler.success(res, { orders: result.rows }, 'Lấy danh sách đơn hàng thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    logger.error('Error fetching orders', error instanceof Error ? error : new Error(String(error)), {
+      userId: req.user?.id,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách đơn hàng', error);
   }
 };
 
@@ -384,12 +327,17 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Đơn hàng không tồn tại' });
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
     }
 
-    res.json({ order: result.rows[0] });
+    return ResponseHandler.success(res, { order: result.rows[0] }, 'Lấy thông tin đơn hàng thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    logger.error('Error fetching order', error instanceof Error ? error : new Error(String(error)), {
+      orderId: id,
+      userId: req.user?.id,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin đơn hàng', error);
   }
 };
 

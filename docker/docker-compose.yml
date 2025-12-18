@@ -41,7 +41,7 @@ services:
       - 8.8.8.8
       - 1.1.1.1
   db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     restart: always
     container_name: DATN-db
     environment:

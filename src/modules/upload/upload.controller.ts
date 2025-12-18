@@ -2,6 +2,8 @@ import { Response } from 'express';
 import multer from 'multer';
 import { uploadFile, uploadMultipleFiles } from './storage.service';
 import { AuthRequest } from '../../types/request.types';
+import { ResponseHandler } from '../../utils/response';
+import { logger } from '../../utils/logging';
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
@@ -29,10 +31,7 @@ export const uploadSingleMiddleware = upload.single('file');
 export const uploadSingle = async (req: AuthRequest, res: Response) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'No file provided' 
-      });
+      return ResponseHandler.error(res, 'No file provided', 400);
     }
 
     const { buffer, originalname, mimetype } = req.file;
@@ -40,22 +39,20 @@ export const uploadSingle = async (req: AuthRequest, res: Response) => {
     // Upload file theo storage config (cloudflare, local, hoặc both)
     const uploadResult = await uploadFile(buffer, originalname, mimetype);
 
-    res.json({
-      success: true,
-      data: {
-        url: uploadResult.url,
-        cloudflareUrl: uploadResult.cloudflareUrl,
-        localUrl: uploadResult.localUrl,
-        fileName: originalname,
-        mimeType: mimetype,
-      },
-    });
+    return ResponseHandler.success(res, {
+      url: uploadResult.url,
+      cloudflareUrl: uploadResult.cloudflareUrl,
+      localUrl: uploadResult.localUrl,
+      fileName: originalname,
+      mimeType: mimetype,
+    }, 'Upload file thành công');
   } catch (error: any) {
-    console.error('Upload error:', error);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to upload file',
+    logger.error('Upload error', error instanceof Error ? error : new Error(String(error)), {
+      fileName: req.file?.originalname,
+      mimeType: req.file?.mimetype,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, error.message || 'Failed to upload file', error);
   }
 };
 
@@ -65,16 +62,30 @@ export const uploadMultipleMiddleware = upload.array('files', 10); // Max 10 fil
 // Multiple files upload handler
 export const uploadMultiple = async (req: AuthRequest, res: Response) => {
   try {
-    if (!req.files || (Array.isArray(req.files) && req.files.length === 0)) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'No files provided' 
-      });
+    if (!req.files) {
+      return ResponseHandler.error(res, 'No files provided', 400);
     }
 
-    const files = Array.isArray(req.files) ? req.files : [req.files];
+    // Handle different file input formats
+    let files: Express.Multer.File[] = [];
     
-    const uploadData = files.map(file => ({
+    if (Array.isArray(req.files)) {
+      // Array format: [file1, file2, ...]
+      files = req.files;
+    } else if (typeof req.files === 'object') {
+      // Object format: { fieldname: [file1, file2, ...] }
+      // Flatten all files from all fields
+      files = Object.values(req.files).flat();
+    } else {
+      // Single file (shouldn't happen with upload.array, but handle it)
+      files = [req.files];
+    }
+
+    if (files.length === 0) {
+      return ResponseHandler.error(res, 'No files provided', 400);
+    }
+    
+    const uploadData: Array<{ buffer: Buffer; fileName: string; mimeType: string }> = files.map((file: Express.Multer.File) => ({
       buffer: file.buffer,
       fileName: file.originalname,
       mimeType: file.mimetype,
@@ -83,21 +94,18 @@ export const uploadMultiple = async (req: AuthRequest, res: Response) => {
     // Upload files theo storage config (cloudflare, local, hoặc both)
     const uploadResult = await uploadMultipleFiles(uploadData);
 
-    res.json({
-      success: true,
-      data: {
-        urls: uploadResult.urls,
-        cloudflareUrls: uploadResult.cloudflareUrls,
-        localUrls: uploadResult.localUrls,
-        count: uploadResult.urls.length,
-      },
-    });
+    return ResponseHandler.success(res, {
+      urls: uploadResult.urls,
+      cloudflareUrls: uploadResult.cloudflareUrls,
+      localUrls: uploadResult.localUrls,
+      count: uploadResult.urls.length,
+    }, 'Upload files thành công');
   } catch (error: any) {
-    console.error('Upload error:', error);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to upload files',
+    logger.error('Upload error', error instanceof Error ? error : new Error(String(error)), {
+      fileCount: req.files ? (Array.isArray(req.files) ? req.files.length : 1) : 0,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, error.message || 'Failed to upload files', error);
   }
 };
 

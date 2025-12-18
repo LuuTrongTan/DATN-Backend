@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { calculateShippingFee, createShippingRecord } from './shipping.service';
+import { ResponseHandler } from '../../utils/response';
+import { logger } from '../../utils/logging';
 
 // Calculate shipping fee
 export const calculateFee = async (req: AuthRequest, res: Response) => {
@@ -9,10 +11,7 @@ export const calculateFee = async (req: AuthRequest, res: Response) => {
     const { province, district, weight, value } = req.body;
 
     if (!province || !district) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tỉnh/thành phố và quận/huyện là bắt buộc',
-      });
+      return ResponseHandler.error(res, 'Tỉnh/thành phố và quận/huyện là bắt buộc', 400);
     }
 
     const result = calculateShippingFee({
@@ -22,15 +21,14 @@ export const calculateFee = async (req: AuthRequest, res: Response) => {
       value: value || 0,
     });
 
-    res.json({
-      success: true,
-      data: result,
-    });
+    return ResponseHandler.success(res, result, 'Tính phí vận chuyển thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error calculating shipping fee', error instanceof Error ? error : new Error(String(error)), {
+      province,
+      district,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi tính phí vận chuyển', error);
   }
 };
 
@@ -47,10 +45,7 @@ export const getShippingInfo = async (req: AuthRequest, res: Response) => {
     );
 
     if (orderCheck.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Đơn hàng không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
     }
 
     const order = orderCheck.rows[0];
@@ -58,33 +53,26 @@ export const getShippingInfo = async (req: AuthRequest, res: Response) => {
     const isAdmin = req.user!.role === 'admin' || req.user!.role === 'staff';
 
     if (!isOwner && !isAdmin) {
-      return res.status(403).json({
-        success: false,
-        message: 'Không có quyền truy cập',
-      });
+      return ResponseHandler.forbidden(res, 'Không có quyền truy cập');
     }
 
     const result = await pool.query(
-      'SELECT * FROM shipping WHERE order_id = $1',
+      'SELECT id, order_id, shipping_fee, shipping_provider, tracking_number, status, notes, created_at, updated_at FROM shipping WHERE order_id = $1',
       [order_id]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Chưa có thông tin vận chuyển',
-      });
+      return ResponseHandler.notFound(res, 'Chưa có thông tin vận chuyển');
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Lấy thông tin vận chuyển thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error fetching shipping info', error instanceof Error ? error : new Error(String(error)), {
+      orderId: order_id,
+      userId,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin vận chuyển', error);
   }
 };
 
@@ -101,10 +89,7 @@ export const updateShippingInfo = async (req: AuthRequest, res: Response) => {
     );
 
     if (checkResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Chưa có thông tin vận chuyển',
-      });
+      return ResponseHandler.notFound(res, 'Chưa có thông tin vận chuyển');
     }
 
     // Build update query
@@ -134,10 +119,7 @@ export const updateShippingInfo = async (req: AuthRequest, res: Response) => {
     }
 
     if (updates.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Không có trường nào để cập nhật',
-      });
+      return ResponseHandler.error(res, 'Không có trường nào để cập nhật', 400);
     }
 
     paramCount++;
@@ -146,20 +128,17 @@ export const updateShippingInfo = async (req: AuthRequest, res: Response) => {
     values.push(order_id);
 
     const result = await pool.query(
-      `UPDATE shipping SET ${updates.join(', ')} WHERE order_id = $${paramCount} RETURNING *`,
+      `UPDATE shipping SET ${updates.join(', ')} WHERE order_id = $${paramCount} RETURNING id, order_id, shipping_fee, shipping_provider, tracking_number, status, notes, created_at, updated_at`,
       values
     );
 
-    res.json({
-      success: true,
-      message: 'Cập nhật thông tin vận chuyển thành công',
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Cập nhật thông tin vận chuyển thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error updating shipping info', error instanceof Error ? error : new Error(String(error)), {
+      orderId: order_id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi cập nhật thông tin vận chuyển', error);
   }
 };
 

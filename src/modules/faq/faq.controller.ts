@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { z } from 'zod';
+import { ResponseHandler } from '../../utils/response';
 
 const faqSchema = z.object({
   question: z.string().min(1, 'Câu hỏi không được để trống'),
@@ -16,7 +17,7 @@ export const getFAQs = async (req: AuthRequest, res: Response) => {
   try {
     const { category } = req.query;
 
-    let query = 'SELECT * FROM faqs WHERE is_active = TRUE';
+    let query = 'SELECT id, question, answer, category, order_index, is_active, created_at, updated_at FROM faqs WHERE is_active = TRUE';
     const params: any[] = [];
 
     if (category) {
@@ -28,15 +29,9 @@ export const getFAQs = async (req: AuthRequest, res: Response) => {
 
     const result = await pool.query(query, params);
 
-    res.json({
-      success: true,
-      data: result.rows,
-    });
+    return ResponseHandler.success(res, result.rows, 'Lấy danh sách FAQ thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    return ResponseHandler.internalError(res, error.message || 'Lỗi lấy danh sách FAQ');
   }
 };
 
@@ -45,24 +40,18 @@ export const getFAQById = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
 
-    const result = await pool.query('SELECT * FROM faqs WHERE id = $1', [id]);
+    const result = await pool.query(
+      'SELECT id, question, answer, category, order_index, is_active, created_at, updated_at FROM faqs WHERE id = $1',
+      [id]
+    );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'FAQ không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'FAQ không tồn tại');
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Lấy thông tin FAQ thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    return ResponseHandler.internalError(res, error.message || 'Lỗi lấy thông tin FAQ');
   }
 };
 
@@ -75,7 +64,7 @@ export const createFAQ = async (req: AuthRequest, res: Response) => {
     const result = await pool.query(
       `INSERT INTO faqs (question, answer, category, order_index, is_active, created_by)
        VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
+       RETURNING id, question, answer, category, order_index, is_active, created_at, updated_at`,
       [
         validated.question,
         validated.answer,
@@ -86,23 +75,12 @@ export const createFAQ = async (req: AuthRequest, res: Response) => {
       ]
     );
 
-    res.status(201).json({
-      success: true,
-      message: 'Tạo FAQ thành công',
-      data: result.rows[0],
-    });
+    return ResponseHandler.created(res, result.rows[0], 'Tạo FAQ thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Dữ liệu không hợp lệ',
-        errors: error.errors,
-      });
+      return ResponseHandler.validationError(res, error.errors);
     }
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    return ResponseHandler.internalError(res, error.message || 'Lỗi tạo FAQ');
   }
 };
 
@@ -114,10 +92,7 @@ export const updateFAQ = async (req: AuthRequest, res: Response) => {
 
     const checkResult = await pool.query('SELECT id FROM faqs WHERE id = $1', [id]);
     if (checkResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'FAQ không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'FAQ không tồn tại');
     }
 
     const updates: string[] = [];
@@ -151,10 +126,7 @@ export const updateFAQ = async (req: AuthRequest, res: Response) => {
     }
 
     if (updates.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Không có trường nào để cập nhật',
-      });
+      return ResponseHandler.error(res, 'Không có trường nào để cập nhật', 400);
     }
 
     paramCount++;
@@ -163,27 +135,16 @@ export const updateFAQ = async (req: AuthRequest, res: Response) => {
     values.push(id);
 
     const result = await pool.query(
-      `UPDATE faqs SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING *`,
+      `UPDATE faqs SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING id, question, answer, category, order_index, is_active, created_at, updated_at`,
       values
     );
 
-    res.json({
-      success: true,
-      message: 'Cập nhật FAQ thành công',
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Cập nhật FAQ thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Dữ liệu không hợp lệ',
-        errors: error.errors,
-      });
+      return ResponseHandler.validationError(res, error.errors);
     }
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    return ResponseHandler.internalError(res, error.message || 'Lỗi cập nhật FAQ');
   }
 };
 
@@ -195,21 +156,12 @@ export const deleteFAQ = async (req: AuthRequest, res: Response) => {
     const result = await pool.query('DELETE FROM faqs WHERE id = $1 RETURNING id', [id]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'FAQ không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'FAQ không tồn tại');
     }
 
-    res.json({
-      success: true,
-      message: 'Xóa FAQ thành công',
-    });
+    return ResponseHandler.success(res, null, 'Xóa FAQ thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    return ResponseHandler.internalError(res, error.message || 'Lỗi xóa FAQ');
   }
 };
 

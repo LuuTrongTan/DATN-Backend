@@ -4,7 +4,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
+import { logger } from '../../utils/logging';
 
 interface LocalStorageConfig {
   uploadDir: string;
@@ -43,7 +44,7 @@ const generateFileName = (originalName: string): string => {
   const ext = path.extname(originalName);
   const baseName = path.basename(originalName, ext);
   const timestamp = Date.now();
-  const uuid = uuidv4().substring(0, 8);
+  const uuid = randomUUID().substring(0, 8);
   return `${baseName}-${timestamp}-${uuid}${ext}`;
 };
 
@@ -84,7 +85,10 @@ export const saveFileToLocal = async (
     
     return publicUrl;
   } catch (error: any) {
-    console.error('Error saving file to local storage:', error);
+    logger.error('Error saving file to local storage', error instanceof Error ? error : new Error(String(error)), {
+      fileName,
+      mimeType,
+    });
     throw new Error(error.message || 'Failed to save file to local storage');
   }
 };
@@ -104,7 +108,9 @@ export const saveMultipleFilesToLocal = async (
     const urls = await Promise.all(savePromises);
     return urls;
   } catch (error: any) {
-    console.error('Error saving multiple files to local storage:', error);
+    logger.error('Error saving multiple files to local storage', error instanceof Error ? error : new Error(String(error)), {
+      fileCount: files.length,
+    });
     throw new Error(error.message || 'Failed to save files to local storage');
   }
 };
@@ -131,10 +137,13 @@ export const deleteFileFromLocal = async (fileUrl: string): Promise<void> => {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     } else {
-      console.warn(`File not found: ${filePath}`);
+      logger.warn(`File not found: ${filePath}`);
     }
   } catch (error: any) {
-    console.error('Error deleting file from local storage:', error);
+    logger.error('Error deleting file from local storage', error instanceof Error ? error : new Error(String(error)), {
+      fileUrl,
+      filePath,
+    });
     throw new Error(error.message || 'Failed to delete file from local storage');
   }
 };

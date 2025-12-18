@@ -1,5 +1,6 @@
 import express from 'express';
 import * as productsController from './products.controller';
+import * as variantsController from './product-variants.controller';
 import { authenticate, optionalAuthenticate, requireRole } from '../../middlewares/auth.middleware';
 import { productCreateMiddleware } from './products.upload';
 
@@ -22,6 +23,13 @@ router.post(
 );
 router.put('/:id', authenticate, requireRole('staff', 'admin'), productsController.updateProduct);
 router.delete('/:id', authenticate, requireRole('staff', 'admin'), productsController.deleteProduct);
+
+// Variants routes
+router.get('/:product_id/variants', optionalAuthenticate, variantsController.getVariantsByProduct);
+router.get('/variants/:id', optionalAuthenticate, variantsController.getVariantById);
+router.post('/:product_id/variants', authenticate, requireRole('staff', 'admin'), variantsController.createVariant);
+router.put('/variants/:id', authenticate, requireRole('staff', 'admin'), variantsController.updateVariant);
+router.delete('/variants/:id', authenticate, requireRole('staff', 'admin'), variantsController.deleteVariant);
 
 export default router;
 

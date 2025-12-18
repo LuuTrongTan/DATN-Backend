@@ -3,6 +3,8 @@
  * Handles file uploads to Cloudflare CDN
  */
 
+import { logger } from '../../utils/logging';
+
 interface CloudflareUploadResponse {
   success: boolean;
   result?: {
@@ -95,7 +97,7 @@ export const uploadImageToCloudflare = async (
       body: formData as any,
     });
 
-    const data: CloudflareUploadResponse = await response.json();
+    const data = await response.json() as CloudflareUploadResponse;
 
     if (!response.ok || !data.success) {
       const errorMessage = data.errors?.[0]?.message || `Upload failed with status ${response.status}`;
@@ -111,7 +113,10 @@ export const uploadImageToCloudflare = async (
     
     return imageUrl;
   } catch (error: any) {
-    console.error('Error uploading to Cloudflare:', error);
+    logger.error('Error uploading to Cloudflare', error instanceof Error ? error : new Error(String(error)), {
+      fileName,
+      mimeType,
+    });
     throw new Error(error.message || 'Failed to upload file to Cloudflare');
   }
 };
@@ -133,7 +138,9 @@ export const uploadMultipleImagesToCloudflare = async (
     const urls = await Promise.all(uploadPromises);
     return urls;
   } catch (error: any) {
-    console.error('Error uploading multiple files to Cloudflare:', error);
+    logger.error('Error uploading multiple files to Cloudflare', error instanceof Error ? error : new Error(String(error)), {
+      fileCount: files.length,
+    });
     throw new Error(error.message || 'Failed to upload files to Cloudflare');
   }
 };
@@ -154,12 +161,14 @@ export const deleteImageFromCloudflare = async (imageId: string): Promise<void> 
     });
 
     if (!response.ok) {
-      const data = await response.json();
+      const data = await response.json() as { errors?: Array<{ message?: string }> };
       const errorMessage = data.errors?.[0]?.message || `Delete failed with status ${response.status}`;
       throw new Error(errorMessage);
     }
   } catch (error: any) {
-    console.error('Error deleting from Cloudflare:', error);
+    logger.error('Error deleting from Cloudflare', error instanceof Error ? error : new Error(String(error)), {
+      imageId,
+    });
     throw new Error(error.message || 'Failed to delete file from Cloudflare');
   }
 };

@@ -3,6 +3,8 @@ import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { productSchema } from './products.validation';
 import { ResponseHandler } from '../../utils/response';
+import { logger } from '../../utils/logging';
+import { uploadFile, uploadMultipleFiles } from '../upload/storage.service';
 
 // UC-07: Tìm kiếm và lọc sản phẩm
 export const searchProducts = async (req: AuthRequest, res: Response) => {
@@ -130,15 +132,13 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
 export const getCategories = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM categories WHERE is_active = TRUE ORDER BY name ASC'
+      'SELECT id, name, image_url, description, is_active, created_at, updated_at FROM categories WHERE is_active = TRUE ORDER BY name ASC'
     );
 
-    res.json({
-      success: true,
-      data: result.rows,
-    });
+    return ResponseHandler.success(res, result.rows, 'Lấy danh sách danh mục thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    logger.error('Error fetching categories', error instanceof Error ? error : new Error(String(error)));
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách danh mục', error);
   }
 };
 
@@ -147,18 +147,19 @@ export const getCategoryById = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
 
-    const result = await pool.query('SELECT * FROM categories WHERE id = $1', [id]);
+    const result = await pool.query(
+      'SELECT id, name, image_url, description, is_active, created_at, updated_at FROM categories WHERE id = $1',
+      [id]
+    );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Danh mục không tồn tại' });
+      return ResponseHandler.notFound(res, 'Danh mục không tồn tại');
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Lấy thông tin danh mục thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    logger.error('Error fetching category', error instanceof Error ? error : new Error(String(error)), { categoryId: id });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin danh mục', error);
   }
 };
 
@@ -226,8 +227,6 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
     
     // Upload image files theo storage config
     if (files?.image_files && files.image_files.length > 0) {
-      const { uploadMultipleFiles } = await import('../upload/storage.service');
-      
       const imageFiles = files.image_files.map(file => ({
         buffer: file.buffer,
         fileName: file.originalname,
@@ -241,7 +240,6 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
     
     // Upload video file theo storage config
     if (files?.video_file && files.video_file.length > 0) {
-      const { uploadFile } = await import('../upload/storage.service');
       
       const videoFile = files.video_file[0];
       
@@ -257,11 +255,11 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
     
     // Validate required fields
     if (!category_id || !name || price === undefined || stock_quantity === undefined) {
-      return res.status(400).json({ message: 'Thiếu thông tin bắt buộc' });
+      return ResponseHandler.error(res, 'Thiếu thông tin bắt buộc', 400);
     }
     
     if (imageUrls.length === 0) {
-      return res.status(400).json({ message: 'Phải có ít nhất 1 hình ảnh' });
+      return ResponseHandler.error(res, 'Phải có ít nhất 1 hình ảnh', 400);
     }
     
     // Check if category exists
@@ -271,14 +269,14 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
     );
 
     if (categoryCheck.rows.length === 0) {
-      return res.status(400).json({ message: 'Danh mục không tồn tại' });
+      return ResponseHandler.error(res, 'Danh mục không tồn tại', 400);
     }
 
     // Insert product into database
     const result = await pool.query(
       `INSERT INTO products (category_id, name, description, price, stock_quantity, image_urls, video_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
+       RETURNING id, category_id, name, description, price, stock_quantity, image_urls, video_url, is_active, created_at, updated_at`,
       [
         category_id,
         name,
@@ -290,13 +288,14 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
       ]
     );
 
-    res.status(201).json({
-      message: 'Thêm sản phẩm thành công',
-      product: result.rows[0],
-    });
+    return ResponseHandler.created(res, result.rows[0], 'Thêm sản phẩm thành công');
   } catch (error: any) {
-    console.error('Create product error:', error);
-    res.status(500).json({ message: error.message || 'Có lỗi xảy ra khi tạo sản phẩm' });
+    logger.error('Create product error', error instanceof Error ? error : new Error(String(error)), {
+      categoryId: category_id,
+      name,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, error.message || 'Có lỗi xảy ra khi tạo sản phẩm', error);
   }
 };
 
@@ -310,14 +309,12 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
     const productCheck = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
 
     if (productCheck.rows.length === 0) {
-      return res.status(404).json({ message: 'Sản phẩm không tồn tại' });
+      return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
     }
 
     // Validate updates
     if (updates.name === '' || updates.stock_quantity === null) {
-      return res.status(400).json({
-        message: 'Tên sản phẩm và số lượng không được để trống',
-      });
+      return ResponseHandler.error(res, 'Tên sản phẩm và số lượng không được để trống', 400);
     }
 
     const allowedFields = ['name', 'description', 'price', 'stock_quantity', 'image_urls', 'video_url', 'category_id'];
@@ -334,7 +331,7 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
     }
 
     if (updateFields.length === 0) {
-      return res.status(400).json({ message: 'Không có trường nào để cập nhật' });
+      return ResponseHandler.error(res, 'Không có trường nào để cập nhật', 400);
     }
 
     paramCount++;
@@ -343,16 +340,17 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
     values.push(id);
 
     const result = await pool.query(
-      `UPDATE products SET ${updateFields.join(', ')} WHERE id = $${paramCount} RETURNING *`,
+      `UPDATE products SET ${updateFields.join(', ')} WHERE id = $${paramCount} RETURNING id, category_id, name, description, price, stock_quantity, image_urls, video_url, is_active, created_at, updated_at`,
       values
     );
 
-    res.json({
-      message: 'Cập nhật sản phẩm thành công',
-      product: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Cập nhật sản phẩm thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    logger.error('Error updating product', error instanceof Error ? error : new Error(String(error)), {
+      productId: id,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi cập nhật sản phẩm', error);
   }
 };
 
@@ -364,12 +362,16 @@ export const deleteProduct = async (req: AuthRequest, res: Response) => {
     const result = await pool.query('DELETE FROM products WHERE id = $1 RETURNING id', [id]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Sản phẩm không tồn tại' });
+      return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
     }
 
-    res.json({ message: 'Xóa sản phẩm thành công' });
+    return ResponseHandler.success(res, null, 'Xóa sản phẩm thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    logger.error('Error deleting product', error instanceof Error ? error : new Error(String(error)), {
+      productId: id,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi xóa sản phẩm', error);
   }
 };
 

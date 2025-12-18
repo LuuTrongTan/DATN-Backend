@@ -19,6 +19,10 @@ export const migration: Migration = {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id)
     `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_order_items_product ON order_items(product_id)
+    `);
   },
 
   async down(pool: Pool) {

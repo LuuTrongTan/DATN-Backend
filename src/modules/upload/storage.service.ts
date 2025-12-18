@@ -6,6 +6,7 @@
 import { getStorageConfig } from './storage.config';
 import { uploadImageToCloudflare, uploadMultipleImagesToCloudflare } from './cloudflare.service';
 import { saveFileToLocal, saveMultipleFilesToLocal } from './localStorage.service';
+import { logger } from '../../utils/logging';
 
 interface UploadResult {
   url: string | null;
@@ -40,7 +41,10 @@ export const uploadFile = async (
       result.cloudflareUrl = await uploadImageToCloudflare(buffer, fileName, mimeType);
       result.url = result.cloudflareUrl; // Ưu tiên Cloudflare URL
     } catch (error: any) {
-      console.error('Cloudflare upload failed:', error.message);
+      logger.error('Cloudflare upload failed', error instanceof Error ? error : new Error(String(error)), {
+        fileName,
+        mimeType,
+      });
       // Nếu chỉ dùng Cloudflare và fail thì throw error
       if (!config.useLocal) {
         throw new Error(`Cloudflare upload failed: ${error.message}`);
@@ -57,7 +61,10 @@ export const uploadFile = async (
         result.url = result.localUrl;
       }
     } catch (error: any) {
-      console.error('Local storage save failed:', error.message);
+      logger.error('Local storage save failed', error instanceof Error ? error : new Error(String(error)), {
+        fileName,
+        mimeType,
+      });
       // Nếu chỉ dùng Local và fail thì throw error
       if (!config.useCloudflare || !result.cloudflareUrl) {
         throw new Error(`Local storage save failed: ${error.message}`);
@@ -91,7 +98,9 @@ export const uploadMultipleFiles = async (
       result.cloudflareUrls = await uploadMultipleImagesToCloudflare(files);
       result.urls = result.cloudflareUrls; // Ưu tiên Cloudflare URLs
     } catch (error: any) {
-      console.error('Cloudflare upload failed:', error.message);
+      logger.error('Cloudflare upload failed', error instanceof Error ? error : new Error(String(error)), {
+        fileCount: files.length,
+      });
       // Nếu chỉ dùng Cloudflare và fail thì throw error
       if (!config.useLocal) {
         throw new Error(`Cloudflare upload failed: ${error.message}`);
@@ -108,7 +117,9 @@ export const uploadMultipleFiles = async (
         result.urls = result.localUrls;
       }
     } catch (error: any) {
-      console.error('Local storage save failed:', error.message);
+      logger.error('Local storage save failed', error instanceof Error ? error : new Error(String(error)), {
+        fileCount: files.length,
+      });
       // Nếu chỉ dùng Local và fail thì throw error
       if (!config.useCloudflare || !result.cloudflareUrls || result.cloudflareUrls.length === 0) {
         throw new Error(`Local storage save failed: ${error.message}`);

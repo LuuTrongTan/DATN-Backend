@@ -3,6 +3,8 @@
  * Cho phép chọn loại storage: cloudflare, local, hoặc both
  */
 
+import { logger } from '../../utils/logging';
+
 export type StorageType = 'cloudflare' | 'local' | 'both';
 
 interface StorageConfig {
@@ -19,7 +21,7 @@ export const getStorageConfig = (): StorageConfig => {
   
   // Validate storage type
   if (!['cloudflare', 'local', 'both'].includes(storageType)) {
-    console.warn(`Invalid STORAGE_TYPE: ${storageType}, defaulting to 'both'`);
+    logger.warn(`Invalid STORAGE_TYPE: ${storageType}, defaulting to 'both'`);
     return {
       type: 'both',
       useCloudflare: true,
@@ -34,7 +36,7 @@ export const getStorageConfig = (): StorageConfig => {
   if (useCloudflare) {
     const hasCloudflareConfig = !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN);
     if (!hasCloudflareConfig) {
-      console.warn('STORAGE_TYPE requires Cloudflare but config is missing. Falling back to local only.');
+      logger.warn('STORAGE_TYPE requires Cloudflare but config is missing. Falling back to local only.');
       return {
         type: 'local',
         useCloudflare: false,

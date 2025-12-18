@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { reviewSchema } from './reviews.validation';
+import { ResponseHandler } from '../../utils/response';
+import { logger } from '../../utils/logging';
 
 // UC-14: Đánh giá sản phẩm
 export const createReview = async (req: AuthRequest, res: Response) => {
@@ -18,9 +20,7 @@ export const createReview = async (req: AuthRequest, res: Response) => {
     );
 
     if (orderCheck.rows.length === 0) {
-      return res.status(404).json({ 
-        message: 'Đơn hàng không tồn tại hoặc chưa được giao' 
-      });
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại hoặc chưa được giao');
     }
 
     const order = orderCheck.rows[0];
@@ -29,9 +29,7 @@ export const createReview = async (req: AuthRequest, res: Response) => {
     const daysDiff = (now.getTime() - orderDate.getTime()) / (1000 * 60 * 60 * 24);
 
     if (daysDiff > 7) {
-      return res.status(400).json({ 
-        message: 'Đơn hàng đã quá 1 tuần, không thể đánh giá' 
-      });
+      return ResponseHandler.error(res, 'Đơn hàng đã quá 1 tuần, không thể đánh giá', 400);
     }
 
     // Check if already reviewed
@@ -41,7 +39,7 @@ export const createReview = async (req: AuthRequest, res: Response) => {
     );
 
     if (existingReview.rows.length > 0) {
-      return res.status(400).json({ message: 'Bạn đã đánh giá sản phẩm này' });
+      return ResponseHandler.error(res, 'Bạn đã đánh giá sản phẩm này', 400);
     }
 
     // Validate file sizes (if uploaded)
@@ -56,7 +54,7 @@ export const createReview = async (req: AuthRequest, res: Response) => {
     const result = await pool.query(
       `INSERT INTO reviews (user_id, product_id, order_id, rating, comment, image_urls, video_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
+       RETURNING id, user_id, product_id, order_id, rating, comment, image_urls, video_url, is_approved, created_at, updated_at`,
       [
         userId,
         validated.product_id,
@@ -68,18 +66,18 @@ export const createReview = async (req: AuthRequest, res: Response) => {
       ]
     );
 
-    res.status(201).json({
-      message: 'Đánh giá thành công',
-      review: result.rows[0],
-    });
+    return ResponseHandler.created(res, result.rows[0], 'Đánh giá thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return res.status(400).json({
-        message: 'Dữ liệu không hợp lệ',
-        errors: error.errors,
-      });
+      return ResponseHandler.validationError(res, error.errors);
     }
-    res.status(500).json({ message: error.message });
+    logger.error('Error creating review', error instanceof Error ? error : new Error(String(error)), {
+      userId,
+      productId: validated.product_id,
+      orderId: validated.order_id,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi tạo đánh giá', error);
   }
 };
 
@@ -91,7 +89,7 @@ export const getProductReviews = async (req: AuthRequest, res: Response) => {
     const limitNum = parseInt(limit as string) || 10;
 
     const result = await pool.query(
-      `SELECT r.*, u.full_name, u.email
+      `SELECT r.id, r.user_id, r.product_id, r.order_id, r.rating, r.comment, r.image_urls, r.video_url, r.is_approved, r.created_at, r.updated_at, u.full_name, u.email
        FROM reviews r
        JOIN users u ON r.user_id = u.id
        WHERE r.product_id = $1 AND r.is_approved = TRUE
@@ -105,16 +103,19 @@ export const getProductReviews = async (req: AuthRequest, res: Response) => {
       [productId]
     );
 
-    res.json({
-      reviews: result.rows,
-      pagination: {
-        page: parseInt(page as string),
-        limit: parseInt(limit as string),
-        total: parseInt(countResult.rows[0].count),
-      },
-    });
+    const total = parseInt(countResult.rows[0].count);
+
+    return ResponseHandler.paginated(res, result.rows, {
+      page: pageNum,
+      limit: limitNum,
+      total,
+    }, 'Lấy danh sách đánh giá thành công');
   } catch (error: any) {
-    res.status(500).json({ message: error.message });
+    logger.error('Error fetching product reviews', error instanceof Error ? error : new Error(String(error)), {
+      productId,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách đánh giá', error);
   }
 };
 

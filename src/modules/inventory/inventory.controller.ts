@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
+import { ResponseHandler } from '../../utils/response';
+import { logger } from '../../utils/logging';
 
 // Stock in (Nhập kho)
 export const stockIn = async (req: AuthRequest, res: Response) => {
@@ -8,17 +10,11 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
     const { product_id, variant_id, quantity, reason } = req.body;
 
     if (!product_id && !variant_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'Phải cung cấp product_id hoặc variant_id',
-      });
+      return ResponseHandler.error(res, 'Phải cung cấp product_id hoặc variant_id', 400);
     }
 
     if (!quantity || quantity <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Số lượng phải lớn hơn 0',
-      });
+      return ResponseHandler.error(res, 'Số lượng phải lớn hơn 0', 400);
     }
 
     // Get current stock
@@ -36,10 +32,7 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
 
     const stockResult = await pool.query(stockQuery, stockParams);
     if (stockResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: variant_id ? 'Biến thể không tồn tại' : 'Sản phẩm không tồn tại',
-      });
+      return ResponseHandler.notFound(res, variant_id ? 'Biến thể không tồn tại' : 'Sản phẩm không tồn tại');
     }
 
     currentStock = parseInt(stockResult.rows[0].stock_quantity);
@@ -76,20 +69,20 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
     // Check and update stock alerts
     await checkAndUpdateStockAlerts(product_id, variant_id, newStock);
 
-    res.json({
-      success: true,
-      message: 'Nhập kho thành công',
-      data: {
-        previous_stock: currentStock,
-        quantity_added: quantity,
-        new_stock: newStock,
-      },
-    });
+    return ResponseHandler.success(res, {
+      previous_stock: currentStock,
+      quantity_added: quantity,
+      new_stock: newStock,
+    }, 'Nhập kho thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error in stock in', error instanceof Error ? error : new Error(String(error)), {
+      productId: product_id,
+      variantId: variant_id,
+      quantity,
+      userId: req.user?.id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi nhập kho', error);
   }
 };
 
@@ -99,17 +92,11 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
     const { product_id, variant_id, new_quantity, reason } = req.body;
 
     if (!product_id && !variant_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'Phải cung cấp product_id hoặc variant_id',
-      });
+      return ResponseHandler.error(res, 'Phải cung cấp product_id hoặc variant_id', 400);
     }
 
     if (new_quantity === undefined || new_quantity < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Số lượng mới không hợp lệ',
-      });
+      return ResponseHandler.error(res, 'Số lượng mới không hợp lệ', 400);
     }
 
     // Get current stock
@@ -127,10 +114,7 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
 
     const stockResult = await pool.query(stockQuery, stockParams);
     if (stockResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: variant_id ? 'Biến thể không tồn tại' : 'Sản phẩm không tồn tại',
-      });
+      return ResponseHandler.notFound(res, variant_id ? 'Biến thể không tồn tại' : 'Sản phẩm không tồn tại');
     }
 
     currentStock = parseInt(stockResult.rows[0].stock_quantity);
@@ -167,20 +151,20 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
     // Check and update stock alerts
     await checkAndUpdateStockAlerts(product_id, variant_id, new_quantity);
 
-    res.json({
-      success: true,
-      message: 'Điều chỉnh kho thành công',
-      data: {
-        previous_stock: currentStock,
-        new_stock: new_quantity,
-        difference,
-      },
-    });
+    return ResponseHandler.success(res, {
+      previous_stock: currentStock,
+      new_stock: new_quantity,
+      difference,
+    }, 'Điều chỉnh kho thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error in stock adjustment', error instanceof Error ? error : new Error(String(error)), {
+      productId: product_id,
+      variantId: variant_id,
+      newQuantity: new_quantity,
+      userId: req.user?.id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi điều chỉnh kho', error);
   }
 };
 
@@ -191,7 +175,7 @@ export const getStockHistory = async (req: AuthRequest, res: Response) => {
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 50;
 
-    let query = 'SELECT * FROM stock_history WHERE 1=1';
+    let query = 'SELECT id, product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by, created_at FROM stock_history WHERE 1=1';
     const params: any[] = [];
     let paramCount = 0;
 
@@ -247,21 +231,19 @@ export const getStockHistory = async (req: AuthRequest, res: Response) => {
     const countResult = await pool.query(countQuery, countParams);
     const total = parseInt(countResult.rows[0].count);
 
-    res.json({
-      success: true,
-      data: result.rows,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        totalPages: Math.ceil(total / limitNum),
-      },
-    });
+    return ResponseHandler.paginated(res, result.rows, {
+      page: pageNum,
+      limit: limitNum,
+      total,
+    }, 'Lấy lịch sử kho thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error fetching stock history', error instanceof Error ? error : new Error(String(error)), {
+      productId: product_id,
+      variantId: variant_id,
+      type,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy lịch sử kho', error);
   }
 };
 
@@ -314,21 +296,17 @@ export const getStockAlerts = async (req: AuthRequest, res: Response) => {
     const countResult = await pool.query(countQuery, countParams);
     const total = parseInt(countResult.rows[0].count);
 
-    res.json({
-      success: true,
-      data: result.rows,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        totalPages: Math.ceil(total / limitNum),
-      },
-    });
+    return ResponseHandler.paginated(res, result.rows, {
+      page: pageNum,
+      limit: limitNum,
+      total,
+    }, 'Lấy danh sách cảnh báo kho thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error fetching stock alerts', error instanceof Error ? error : new Error(String(error)), {
+      isNotified: is_notified,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách cảnh báo kho', error);
   }
 };
 
@@ -341,27 +319,21 @@ export const markAlertAsNotified = async (req: AuthRequest, res: Response) => {
       `UPDATE stock_alerts 
        SET is_notified = TRUE, notified_at = NOW(), updated_at = NOW()
        WHERE id = $1
-       RETURNING *`,
+       RETURNING id, product_id, variant_id, threshold, current_stock, is_notified, notified_at, created_at, updated_at`,
       [id]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Cảnh báo không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Cảnh báo không tồn tại');
     }
 
-    res.json({
-      success: true,
-      message: 'Đã đánh dấu cảnh báo',
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Đã đánh dấu cảnh báo');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error marking alert as notified', error instanceof Error ? error : new Error(String(error)), {
+      alertId: id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi đánh dấu cảnh báo', error);
   }
 };
 

@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
+import { ResponseHandler } from '../../utils/response';
+import { logger } from '../../utils/logging';
 
 // Get wishlist for current user
 export const getWishlist = async (req: AuthRequest, res: Response) => {
@@ -16,15 +18,13 @@ export const getWishlist = async (req: AuthRequest, res: Response) => {
       [userId]
     );
 
-    res.json({
-      success: true,
-      data: result.rows,
-    });
+    return ResponseHandler.success(res, result.rows, 'Lấy danh sách yêu thích thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error fetching wishlist', error instanceof Error ? error : new Error(String(error)), {
+      userId: req.user?.id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách yêu thích', error);
   }
 };
 
@@ -35,10 +35,7 @@ export const addToWishlist = async (req: AuthRequest, res: Response) => {
     const { product_id } = req.body;
 
     if (!product_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'product_id là bắt buộc',
-      });
+      return ResponseHandler.error(res, 'product_id là bắt buộc', 400);
     }
 
     // Check if product exists
@@ -48,10 +45,7 @@ export const addToWishlist = async (req: AuthRequest, res: Response) => {
     );
 
     if (productCheck.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Sản phẩm không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
     }
 
     // Check if already in wishlist
@@ -61,36 +55,28 @@ export const addToWishlist = async (req: AuthRequest, res: Response) => {
     );
 
     if (existingCheck.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Sản phẩm đã có trong danh sách yêu thích',
-      });
+      return ResponseHandler.error(res, 'Sản phẩm đã có trong danh sách yêu thích', 400);
     }
 
     const result = await pool.query(
       `INSERT INTO wishlist (user_id, product_id)
        VALUES ($1, $2)
-       RETURNING *`,
+       RETURNING id, user_id, product_id, created_at`,
       [userId, product_id]
     );
 
-    res.status(201).json({
-      success: true,
-      message: 'Đã thêm vào danh sách yêu thích',
-      data: result.rows[0],
-    });
+    return ResponseHandler.created(res, result.rows[0], 'Đã thêm vào danh sách yêu thích');
   } catch (error: any) {
     if (error.code === '23505') {
       // Unique constraint violation
-      return res.status(400).json({
-        success: false,
-        message: 'Sản phẩm đã có trong danh sách yêu thích',
-      });
+      return ResponseHandler.error(res, 'Sản phẩm đã có trong danh sách yêu thích', 400);
     }
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error adding to wishlist', error instanceof Error ? error : new Error(String(error)), {
+      userId,
+      productId: product_id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi thêm vào danh sách yêu thích', error);
   }
 };
 
@@ -106,21 +92,17 @@ export const removeFromWishlist = async (req: AuthRequest, res: Response) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Sản phẩm không có trong danh sách yêu thích',
-      });
+      return ResponseHandler.notFound(res, 'Sản phẩm không có trong danh sách yêu thích');
     }
 
-    res.json({
-      success: true,
-      message: 'Đã xóa khỏi danh sách yêu thích',
-    });
+    return ResponseHandler.success(res, null, 'Đã xóa khỏi danh sách yêu thích');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error removing from wishlist', error instanceof Error ? error : new Error(String(error)), {
+      userId,
+      productId: product_id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi xóa khỏi danh sách yêu thích', error);
   }
 };
 
@@ -135,15 +117,14 @@ export const checkWishlist = async (req: AuthRequest, res: Response) => {
       [userId, product_id]
     );
 
-    res.json({
-      success: true,
-      isInWishlist: result.rows.length > 0,
-    });
+    return ResponseHandler.success(res, { isInWishlist: result.rows.length > 0 }, 'Kiểm tra wishlist thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error checking wishlist', error instanceof Error ? error : new Error(String(error)), {
+      userId,
+      productId: product_id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi kiểm tra wishlist', error);
   }
 };
 

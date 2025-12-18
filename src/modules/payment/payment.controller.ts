@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { createPaymentUrl, verifyPaymentCallback } from './vnpay.service';
+import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 
 // Create VNPay payment URL
@@ -11,32 +12,23 @@ export const createVNPayPayment = async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
 
     if (!order_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'order_id là bắt buộc',
-      });
+      return ResponseHandler.error(res, 'order_id là bắt buộc', 400);
     }
 
     // Get order
     const orderResult = await pool.query(
-      'SELECT * FROM orders WHERE id = $1 AND user_id = $2',
+      'SELECT id, order_number, total_amount, payment_status, user_id FROM orders WHERE id = $1 AND user_id = $2',
       [order_id, userId]
     );
 
     if (orderResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Đơn hàng không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
     }
 
     const order = orderResult.rows[0];
 
     if (order.payment_status === 'paid') {
-      return res.status(400).json({
-        success: false,
-        message: 'Đơn hàng đã được thanh toán',
-      });
+      return ResponseHandler.error(res, 'Đơn hàng đã được thanh toán', 400);
     }
 
     // Create payment URL
@@ -51,22 +43,17 @@ export const createVNPayPayment = async (req: AuthRequest, res: Response) => {
     );
 
     if (!paymentUrl) {
-      return res.status(500).json({
-        success: false,
-        message: 'VNPay chưa được cấu hình. Vui lòng liên hệ quản trị viên.',
-      });
+      return ResponseHandler.error(res, 'VNPay chưa được cấu hình. Vui lòng liên hệ quản trị viên.', 500);
     }
 
-    res.json({
-      success: true,
-      payment_url: paymentUrl,
-    });
+    return ResponseHandler.success(res, { payment_url: paymentUrl }, 'Tạo URL thanh toán thành công');
   } catch (error: any) {
-    logger.error('Error creating VNPay payment', { error: error.message });
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error creating VNPay payment', error instanceof Error ? error : new Error(String(error)), {
+      orderId: order_id,
+      userId,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi tạo URL thanh toán', error);
   }
 };
 
@@ -76,30 +63,27 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
     const verification = verifyPaymentCallback(req.query as Record<string, string>);
 
     if (!verification.isValid) {
-      return res.status(400).json({
-        success: false,
-        message: 'Xác thực thanh toán thất bại',
-      });
+      logger.warn('VNPay callback verification failed', { query: req.query });
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/orders?payment=error`);
     }
 
     if (!verification.orderNumber) {
-      return res.status(400).json({
-        success: false,
-        message: 'Không tìm thấy mã đơn hàng',
-      });
+      logger.warn('VNPay callback missing order number', { query: req.query });
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/orders?payment=error`);
     }
 
     // Find order by order_number
     const orderResult = await pool.query(
-      'SELECT * FROM orders WHERE order_number = $1',
+      'SELECT id, order_number, payment_status, order_status FROM orders WHERE order_number = $1',
       [verification.orderNumber]
     );
 
     if (orderResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Không tìm thấy đơn hàng',
-      });
+      logger.warn('VNPay callback order not found', { orderNumber: verification.orderNumber });
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/orders?payment=error`);
     }
 
     const order = orderResult.rows[0];
@@ -156,21 +140,17 @@ export const getPaymentStatus = async (req: AuthRequest, res: Response) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Đơn hàng không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Lấy trạng thái thanh toán thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error fetching payment status', error instanceof Error ? error : new Error(String(error)), {
+      orderId: order_id,
+      userId,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy trạng thái thanh toán', error);
   }
 };
 

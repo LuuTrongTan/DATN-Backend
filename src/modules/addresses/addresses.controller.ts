@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { createAddressSchema, updateAddressSchema } from './addresses.validation';
+import { ResponseHandler } from '../../utils/response';
+import { logger } from '../../utils/logging';
 
 // Get all addresses for current user
 export const getAddresses = async (req: AuthRequest, res: Response) => {
@@ -9,21 +11,19 @@ export const getAddresses = async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
 
     const result = await pool.query(
-      `SELECT * FROM user_addresses 
+      `SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at FROM user_addresses 
        WHERE user_id = $1 
        ORDER BY is_default DESC, created_at DESC`,
       [userId]
     );
 
-    res.json({
-      success: true,
-      data: result.rows,
-    });
+    return ResponseHandler.success(res, result.rows, 'Lấy danh sách địa chỉ thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error fetching addresses', error instanceof Error ? error : new Error(String(error)), {
+      userId,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách địa chỉ', error);
   }
 };
 
@@ -34,26 +34,22 @@ export const getAddressById = async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
 
     const result = await pool.query(
-      'SELECT * FROM user_addresses WHERE id = $1 AND user_id = $2',
+      'SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at FROM user_addresses WHERE id = $1 AND user_id = $2',
       [id, userId]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Địa chỉ không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Địa chỉ không tồn tại');
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Lấy thông tin địa chỉ thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error fetching address', error instanceof Error ? error : new Error(String(error)), {
+      addressId: id,
+      userId,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin địa chỉ', error);
   }
 };
 
@@ -74,7 +70,7 @@ export const createAddress = async (req: AuthRequest, res: Response) => {
     const result = await pool.query(
       `INSERT INTO user_addresses (user_id, full_name, phone, province, district, ward, street_address, is_default)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
+       RETURNING id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at`,
       [
         userId,
         validated.full_name,
@@ -87,23 +83,16 @@ export const createAddress = async (req: AuthRequest, res: Response) => {
       ]
     );
 
-    res.status(201).json({
-      success: true,
-      message: 'Thêm địa chỉ thành công',
-      data: result.rows[0],
-    });
+    return ResponseHandler.created(res, result.rows[0], 'Thêm địa chỉ thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Dữ liệu không hợp lệ',
-        errors: error.errors,
-      });
+      return ResponseHandler.validationError(res, error.errors);
     }
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error creating address', error instanceof Error ? error : new Error(String(error)), {
+      userId,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi thêm địa chỉ', error);
   }
 };
 
@@ -121,10 +110,7 @@ export const updateAddress = async (req: AuthRequest, res: Response) => {
     );
 
     if (checkResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Địa chỉ không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Địa chỉ không tồn tại');
     }
 
     // If setting as default, unset other defaults
@@ -177,10 +163,7 @@ export const updateAddress = async (req: AuthRequest, res: Response) => {
     }
 
     if (updates.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Không có trường nào để cập nhật',
-      });
+      return ResponseHandler.error(res, 'Không có trường nào để cập nhật', 400);
     }
 
     paramCount++;
@@ -194,27 +177,21 @@ export const updateAddress = async (req: AuthRequest, res: Response) => {
       `UPDATE user_addresses 
        SET ${updates.join(', ')} 
        WHERE id = $${paramCount - 1} AND user_id = $${paramCount}
-       RETURNING *`,
+       RETURNING id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at`,
       values
     );
 
-    res.json({
-      success: true,
-      message: 'Cập nhật địa chỉ thành công',
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Cập nhật địa chỉ thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Dữ liệu không hợp lệ',
-        errors: error.errors,
-      });
+      return ResponseHandler.validationError(res, error.errors);
     }
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error updating address', error instanceof Error ? error : new Error(String(error)), {
+      addressId: id,
+      userId,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi cập nhật địa chỉ', error);
   }
 };
 
@@ -230,21 +207,17 @@ export const deleteAddress = async (req: AuthRequest, res: Response) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Địa chỉ không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Địa chỉ không tồn tại');
     }
 
-    res.json({
-      success: true,
-      message: 'Xóa địa chỉ thành công',
-    });
+    return ResponseHandler.success(res, null, 'Xóa địa chỉ thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error deleting address', error instanceof Error ? error : new Error(String(error)), {
+      addressId: id,
+      userId,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi xóa địa chỉ', error);
   }
 };
 

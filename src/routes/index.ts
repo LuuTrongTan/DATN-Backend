@@ -9,9 +9,10 @@ import uploadRoutes from '../modules/upload/upload.routes';
 import addressesRoutes from '../modules/addresses/addresses.routes';
 import wishlistRoutes from '../modules/wishlist/wishlist.routes';
 import inventoryRoutes from '../modules/inventory/inventory.routes';
-import couponsRoutes from '../modules/coupons/coupons.routes';
 import paymentRoutes from '../modules/payment/payment.routes';
 import shippingRoutes from '../modules/shipping/shipping.routes';
+import faqRoutes from '../modules/faq/faq.routes';
+import supportRoutes from '../modules/support/support.routes';
 
 const router = express.Router();
 
@@ -26,9 +27,10 @@ router.use('/upload', uploadRoutes);
 router.use('/addresses', addressesRoutes);
 router.use('/wishlist', wishlistRoutes);
 router.use('/inventory', inventoryRoutes);
-router.use('/coupons', couponsRoutes);
 router.use('/payment', paymentRoutes);
 router.use('/shipping', shippingRoutes);
+router.use('/faq', faqRoutes);
+router.use('/support', supportRoutes);
 
 export default router;
 

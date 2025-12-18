@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
+import { ResponseHandler } from '../../utils/response';
+import { logger } from '../../utils/logging';
 
 // Get all reviews (admin/staff) - including unapproved
 export const getAllReviews = async (req: AuthRequest, res: Response) => {
@@ -10,7 +12,7 @@ export const getAllReviews = async (req: AuthRequest, res: Response) => {
     const limitNum = parseInt(limit as string) || 20;
 
     let query = `
-      SELECT r.*, u.full_name, u.email, p.name as product_name
+      SELECT r.id, r.user_id, r.product_id, r.order_id, r.rating, r.comment, r.image_urls, r.video_url, r.is_approved, r.created_at, r.updated_at, u.full_name, u.email, p.name as product_name
       FROM reviews r
       JOIN users u ON r.user_id = u.id
       JOIN products p ON r.product_id = p.id
@@ -61,21 +63,14 @@ export const getAllReviews = async (req: AuthRequest, res: Response) => {
     const countResult = await pool.query(countQuery, countParams);
     const total = parseInt(countResult.rows[0].count);
 
-    res.json({
-      success: true,
-      data: result.rows,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        totalPages: Math.ceil(total / limitNum),
-      },
-    });
+    return ResponseHandler.paginated(res, result.rows, {
+      page: pageNum,
+      limit: limitNum,
+      total,
+    }, 'Lấy danh sách đánh giá thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    logger.error('Error fetching all reviews', error instanceof Error ? error : new Error(String(error)));
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách đánh giá', error);
   }
 };
 
@@ -85,27 +80,21 @@ export const approveReview = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
 
     const result = await pool.query(
-      'UPDATE reviews SET is_approved = TRUE, updated_at = NOW() WHERE id = $1 RETURNING *',
+      'UPDATE reviews SET is_approved = TRUE, updated_at = NOW() WHERE id = $1 RETURNING id, user_id, product_id, order_id, rating, comment, image_urls, video_url, is_approved, created_at, updated_at',
       [id]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Đánh giá không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Đánh giá không tồn tại');
     }
 
-    res.json({
-      success: true,
-      message: 'Phê duyệt đánh giá thành công',
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Phê duyệt đánh giá thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error approving review', error instanceof Error ? error : new Error(String(error)), {
+      reviewId: id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi phê duyệt đánh giá', error);
   }
 };
 
@@ -120,27 +109,21 @@ export const rejectReview = async (req: AuthRequest, res: Response) => {
     // We'll use soft delete by setting is_approved = FALSE and adding a note
 
     const result = await pool.query(
-      'UPDATE reviews SET is_approved = FALSE, updated_at = NOW() WHERE id = $1 RETURNING *',
+      'UPDATE reviews SET is_approved = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id, user_id, product_id, order_id, rating, comment, image_urls, video_url, is_approved, created_at, updated_at',
       [id]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Đánh giá không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Đánh giá không tồn tại');
     }
 
-    res.json({
-      success: true,
-      message: 'Từ chối đánh giá thành công',
-      data: result.rows[0],
-    });
+    return ResponseHandler.success(res, result.rows[0], 'Từ chối đánh giá thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error rejecting review', error instanceof Error ? error : new Error(String(error)), {
+      reviewId: id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi từ chối đánh giá', error);
   }
 };
 
@@ -152,21 +135,16 @@ export const deleteReview = async (req: AuthRequest, res: Response) => {
     const result = await pool.query('DELETE FROM reviews WHERE id = $1 RETURNING id', [id]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Đánh giá không tồn tại',
-      });
+      return ResponseHandler.notFound(res, 'Đánh giá không tồn tại');
     }
 
-    res.json({
-      success: true,
-      message: 'Xóa đánh giá thành công',
-    });
+    return ResponseHandler.success(res, null, 'Xóa đánh giá thành công');
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
+    logger.error('Error deleting review', error instanceof Error ? error : new Error(String(error)), {
+      reviewId: id,
+      ip: req.ip,
     });
+    return ResponseHandler.internalError(res, 'Lỗi khi xóa đánh giá', error);
   }
 };
 

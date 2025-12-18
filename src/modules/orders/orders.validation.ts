@@ -6,7 +6,6 @@ export const orderSchema = z.object({
   payment_method: z.enum(['online', 'cod']),
   shipping_fee: z.number().nonnegative().optional(),
   notes: z.string().optional(),
-  coupon_code: z.string().optional(),
   address_id: z.number().int().positive().optional(),
 });
 

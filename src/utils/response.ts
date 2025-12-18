@@ -88,6 +88,25 @@ export class ResponseHandler {
   }
 
   /**
+   * Bad Request Response (400)
+   */
+  static badRequest(
+    res: Response,
+    message: string = 'Yêu cầu không hợp lệ',
+    details?: any
+  ): Response {
+    return this.error(
+      res,
+      message,
+      400,
+      {
+        code: 'BAD_REQUEST',
+        details,
+      }
+    );
+  }
+
+  /**
    * Validation Error Response
    */
   static validationError(

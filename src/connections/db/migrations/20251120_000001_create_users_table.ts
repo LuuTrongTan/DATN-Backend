@@ -11,10 +11,20 @@ export const migration: Migration = {
         phone VARCHAR(10) UNIQUE,
         password_hash VARCHAR(255) NOT NULL,
         full_name VARCHAR(255),
+        avatar_url VARCHAR(500),
+        -- Xác thực riêng biệt
         is_verified BOOLEAN DEFAULT FALSE,
+        email_verified BOOLEAN DEFAULT FALSE,
+        phone_verified BOOLEAN DEFAULT FALSE,
+        -- Trạng thái
         is_active BOOLEAN DEFAULT TRUE,
         is_banned BOOLEAN DEFAULT FALSE,
         role VARCHAR(20) DEFAULT 'customer',
+        -- Thông tin cá nhân
+        date_of_birth DATE,
+        gender VARCHAR(10), -- 'male', 'female', 'other'
+        -- Hoạt động
+        last_login_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
