@@ -7,8 +7,11 @@ import { logger } from '../../utils/logging';
 
 // Get all addresses for current user
 export const getAddresses = async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
   try {
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     const result = await pool.query(
       `SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at FROM user_addresses 
@@ -29,9 +32,12 @@ export const getAddresses = async (req: AuthRequest, res: Response) => {
 
 // Get address by ID
 export const getAddressById = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user?.id;
   try {
-    const { id } = req.params;
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     const result = await pool.query(
       'SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at FROM user_addresses WHERE id = $1 AND user_id = $2',
@@ -55,9 +61,12 @@ export const getAddressById = async (req: AuthRequest, res: Response) => {
 
 // Create new address
 export const createAddress = async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
   try {
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
     const validated = createAddressSchema.parse(req.body);
-    const userId = req.user!.id;
 
     // If this is set as default, unset other defaults
     if (validated.is_default) {
@@ -98,9 +107,12 @@ export const createAddress = async (req: AuthRequest, res: Response) => {
 
 // Update address
 export const updateAddress = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user?.id;
   try {
-    const { id } = req.params;
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
     const validated = updateAddressSchema.parse(req.body);
 
     // Check if address exists and belongs to user
@@ -197,9 +209,12 @@ export const updateAddress = async (req: AuthRequest, res: Response) => {
 
 // Delete address
 export const deleteAddress = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user?.id;
   try {
-    const { id } = req.params;
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     const result = await pool.query(
       'DELETE FROM user_addresses WHERE id = $1 AND user_id = $2 RETURNING id',

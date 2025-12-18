@@ -60,6 +60,7 @@ export const saveFileToLocal = async (
   fileName: string,
   mimeType: string
 ): Promise<string> => {
+  let filePath: string | undefined;
   try {
     const config = getLocalStorageConfig();
     
@@ -75,7 +76,7 @@ export const saveFileToLocal = async (
     
     // Generate unique filename
     const uniqueFileName = generateFileName(fileName);
-    const filePath = path.join(targetDir, uniqueFileName);
+    filePath = path.join(targetDir, uniqueFileName);
     
     // Write file to disk
     fs.writeFileSync(filePath, fileBuffer);
@@ -88,6 +89,7 @@ export const saveFileToLocal = async (
     logger.error('Error saving file to local storage', error instanceof Error ? error : new Error(String(error)), {
       fileName,
       mimeType,
+      filePath,
     });
     throw new Error(error.message || 'Failed to save file to local storage');
   }
@@ -120,6 +122,7 @@ export const saveMultipleFilesToLocal = async (
  * @param fileUrl - File URL to delete
  */
 export const deleteFileFromLocal = async (fileUrl: string): Promise<void> => {
+  let filePath: string | undefined;
   try {
     const config = getLocalStorageConfig();
     
@@ -131,7 +134,7 @@ export const deleteFileFromLocal = async (fileUrl: string): Promise<void> => {
     }
     
     const relativePath = urlParts[1];
-    const filePath = path.join(config.uploadDir, relativePath);
+    filePath = path.join(config.uploadDir, relativePath);
     
     // Check if file exists
     if (fs.existsSync(filePath)) {

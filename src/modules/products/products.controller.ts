@@ -15,7 +15,7 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
     const userId = req.user?.id || null;
 
     const baseQuery =
-      'FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = TRUE';
+      'FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = TRUE AND p.deleted_at IS NULL';
 
     let query =
       'SELECT p.*, c.name as category_name, ' +
@@ -105,13 +105,15 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
               END as is_in_wishlist
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
-       WHERE p.is_active = TRUE
+       WHERE p.is_active = TRUE AND p.deleted_at IS NULL
        ORDER BY p.created_at DESC
        LIMIT $1 OFFSET $2`,
       [limitNum, (pageNum - 1) * limitNum, userId]
     );
 
-    const countResult = await pool.query('SELECT COUNT(*) FROM products WHERE is_active = TRUE');
+    const countResult = await pool.query(
+      'SELECT COUNT(*) FROM products WHERE is_active = TRUE AND deleted_at IS NULL'
+    );
     const total = parseInt(countResult.rows[0].count);
 
     return ResponseHandler.success(res, {
@@ -132,7 +134,7 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
 export const getCategories = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
-      'SELECT id, name, image_url, description, is_active, created_at, updated_at FROM categories WHERE is_active = TRUE ORDER BY name ASC'
+      'SELECT id, name, image_url, description, is_active, created_at, updated_at FROM categories WHERE is_active = TRUE AND deleted_at IS NULL ORDER BY name ASC'
     );
 
     return ResponseHandler.success(res, result.rows, 'Lấy danh sách danh mục thành công');
@@ -144,11 +146,11 @@ export const getCategories = async (req: AuthRequest, res: Response) => {
 
 // Get category by ID (public)
 export const getCategoryById = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
 
     const result = await pool.query(
-      'SELECT id, name, image_url, description, is_active, created_at, updated_at FROM categories WHERE id = $1',
+      'SELECT id, name, image_url, description, is_active, created_at, updated_at FROM categories WHERE id = $1 AND deleted_at IS NULL',
       [id]
     );
 
@@ -184,10 +186,10 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
          'variant_value', pv.variant_value,
          'price_adjustment', pv.price_adjustment,
          'stock_quantity', pv.stock_quantity
-       )) FROM product_variants pv WHERE pv.product_id = p.id) as variants
+       )) FROM product_variants pv WHERE pv.product_id = p.id AND pv.deleted_at IS NULL) as variants
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
-       WHERE p.id = $1`,
+       WHERE p.id = $1 AND p.deleted_at IS NULL`,
       [id, userId]
     );
 
@@ -203,11 +205,13 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
 
 // UC-15: Thêm sản phẩm
 export const createProduct = async (req: AuthRequest, res: Response) => {
+  let category_id: number | undefined;
+  let name: string | undefined;
   try {
     // Parse form data
     const body = req.body;
-    const category_id = parseInt(body.category_id);
-    const name = body.name;
+    category_id = parseInt(body.category_id);
+    name = body.name;
     const description = body.description || null;
     const price = parseFloat(body.price);
     const stock_quantity = parseInt(body.stock_quantity);
@@ -301,8 +305,8 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 
 // UC-16: Sửa sản phẩm
 export const updateProduct = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
     const updates = req.body;
 
     // Check if product exists
@@ -356,10 +360,16 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
 
 // UC-17: Xóa sản phẩm
 export const deleteProduct = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
 
-    const result = await pool.query('DELETE FROM products WHERE id = $1 RETURNING id', [id]);
+    const result = await pool.query(
+      `UPDATE products 
+       SET deleted_at = NOW(), is_active = FALSE, updated_at = NOW()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING id`,
+      [id]
+    );
 
     if (result.rows.length === 0) {
       return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');

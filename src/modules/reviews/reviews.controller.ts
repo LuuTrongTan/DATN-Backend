@@ -7,9 +7,13 @@ import { logger } from '../../utils/logging';
 
 // UC-14: Đánh giá sản phẩm
 export const createReview = async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  let validated: any;
   try {
-    const validated = reviewSchema.parse(req.body);
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
+    validated = reviewSchema.parse(req.body);
 
     // Check if order exists and is delivered
     const orderCheck = await pool.query(
@@ -82,8 +86,8 @@ export const createReview = async (req: AuthRequest, res: Response) => {
 };
 
 export const getProductReviews = async (req: AuthRequest, res: Response) => {
+  const { productId } = req.params;
   try {
-    const { productId } = req.params;
     const { page = 1, limit = 10 } = req.query;
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 10;

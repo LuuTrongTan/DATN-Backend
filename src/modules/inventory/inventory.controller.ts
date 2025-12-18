@@ -6,8 +6,15 @@ import { logger } from '../../utils/logging';
 
 // Stock in (Nhập kho)
 export const stockIn = async (req: AuthRequest, res: Response) => {
+  let product_id: number | undefined;
+  let variant_id: number | undefined;
+  let quantity: number | undefined;
   try {
-    const { product_id, variant_id, quantity, reason } = req.body;
+    const body = req.body;
+    product_id = body.product_id;
+    variant_id = body.variant_id;
+    quantity = body.quantity;
+    const reason = body.reason;
 
     if (!product_id && !variant_id) {
       return ResponseHandler.error(res, 'Phải cung cấp product_id hoặc variant_id', 400);
@@ -88,8 +95,15 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
 
 // Stock adjustment (Điều chỉnh kho)
 export const stockAdjustment = async (req: AuthRequest, res: Response) => {
+  let product_id: number | undefined;
+  let variant_id: number | undefined;
+  let new_quantity: number | undefined;
   try {
-    const { product_id, variant_id, new_quantity, reason } = req.body;
+    const body = req.body;
+    product_id = body.product_id;
+    variant_id = body.variant_id;
+    new_quantity = body.new_quantity;
+    const reason = body.reason;
 
     if (!product_id && !variant_id) {
       return ResponseHandler.error(res, 'Phải cung cấp product_id hoặc variant_id', 400);
@@ -170,8 +184,11 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
 
 // Get stock history
 export const getStockHistory = async (req: AuthRequest, res: Response) => {
+  const product_id = req.query.product_id as string | undefined;
+  const variant_id = req.query.variant_id as string | undefined;
+  const type = req.query.type as string | undefined;
   try {
-    const { product_id, variant_id, type, page = 1, limit = 50 } = req.query;
+    const { page = 1, limit = 50 } = req.query;
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 50;
 
@@ -249,8 +266,9 @@ export const getStockHistory = async (req: AuthRequest, res: Response) => {
 
 // Get stock alerts
 export const getStockAlerts = async (req: AuthRequest, res: Response) => {
+  const is_notified = req.query.is_notified as string | undefined;
   try {
-    const { is_notified, page = 1, limit = 50 } = req.query;
+    const { page = 1, limit = 50 } = req.query;
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 50;
 
@@ -312,8 +330,8 @@ export const getStockAlerts = async (req: AuthRequest, res: Response) => {
 
 // Mark alert as notified
 export const markAlertAsNotified = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
 
     const result = await pool.query(
       `UPDATE stock_alerts 

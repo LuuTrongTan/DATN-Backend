@@ -253,6 +253,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     if (error.name === 'ZodError') {
       return ResponseHandler.validationError(res, error.errors);
     }
+    const userId = req.user?.id;
     logger.error('Error creating order', error instanceof Error ? error : new Error(String(error)), {
       userId,
       ip: req.ip,
@@ -300,9 +301,12 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
 };
 
 export const getOrderById = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user?.id;
   try {
-    const { id } = req.params;
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     const result = await pool.query(
       `SELECT o.*,

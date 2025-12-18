@@ -15,7 +15,9 @@ export const migration: Migration = {
         assigned_to INTEGER REFERENCES users(id),
         order_id INTEGER REFERENCES orders(id),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- Soft delete
+        deleted_at TIMESTAMP
       )
     `);
 

@@ -31,7 +31,9 @@ export const migration: Migration = {
         delivery_date DATE,
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- Soft delete
+        deleted_at TIMESTAMP
       )
     `);
 

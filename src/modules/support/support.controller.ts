@@ -79,8 +79,8 @@ export const getTickets = async (req: AuthRequest, res: Response) => {
 
 // Get ticket by ID
 export const getTicketById = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
     const userId = req.user!.id;
     const role = req.user!.role;
 
@@ -121,9 +121,12 @@ export const getTicketById = async (req: AuthRequest, res: Response) => {
 
 // Create ticket
 export const createTicket = async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
   try {
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
     const validated = createTicketSchema.parse(req.body);
-    const userId = req.user!.id;
     const ticketNumber = generateTicketNumber(userId);
 
     const result = await pool.query(
@@ -155,8 +158,8 @@ export const createTicket = async (req: AuthRequest, res: Response) => {
 
 // Update ticket
 export const updateTicket = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
     const validated = updateTicketSchema.parse(req.body);
     const userId = req.user!.id;
     const role = req.user!.role;
@@ -240,10 +243,13 @@ export const updateTicket = async (req: AuthRequest, res: Response) => {
 
 // Get messages for a ticket
 export const getTicketMessages = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user?.id;
+  const role = req.user?.role;
   try {
-    const { id } = req.params;
-    const userId = req.user!.id;
-    const role = req.user!.role;
+    if (!userId || !role) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     // Check if ticket exists and user has permission
     const ticketResult = await pool.query('SELECT user_id FROM support_tickets WHERE id = $1', [id]);
@@ -278,11 +284,14 @@ export const getTicketMessages = async (req: AuthRequest, res: Response) => {
 
 // Send message to ticket
 export const sendMessage = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user?.id;
+  const role = req.user?.role;
   try {
-    const { id } = req.params;
+    if (!userId || !role) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
     const validated = sendMessageSchema.parse(req.body);
-    const userId = req.user!.id;
-    const role = req.user!.role;
 
     // Check if ticket exists and user has permission
     const ticketResult = await pool.query('SELECT user_id, status FROM support_tickets WHERE id = $1', [id]);

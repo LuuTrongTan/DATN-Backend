@@ -7,8 +7,8 @@ import { logger } from '../../utils/logging';
 
 // Tạo biến thể sản phẩm
 export const createVariant = async (req: AuthRequest, res: Response) => {
+  const { product_id } = req.params;
   try {
-    const { product_id } = req.params;
     const validated = createVariantSchema.parse(req.body);
 
     // Kiểm tra sản phẩm tồn tại
@@ -66,8 +66,8 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
 
 // Lấy tất cả biến thể của sản phẩm
 export const getVariantsByProduct = async (req: AuthRequest, res: Response) => {
+  const { product_id } = req.params;
   try {
-    const { product_id } = req.params;
 
     const result = await pool.query(
       `SELECT id, product_id, variant_type, variant_value, price_adjustment, stock_quantity, created_at, updated_at FROM product_variants 
@@ -88,8 +88,8 @@ export const getVariantsByProduct = async (req: AuthRequest, res: Response) => {
 
 // Lấy biến thể theo ID
 export const getVariantById = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
 
     const result = await pool.query(
       'SELECT id, product_id, variant_type, variant_value, price_adjustment, stock_quantity, created_at, updated_at FROM product_variants WHERE id = $1',
@@ -112,8 +112,8 @@ export const getVariantById = async (req: AuthRequest, res: Response) => {
 
 // Cập nhật biến thể
 export const updateVariant = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
     const validated = updateVariantSchema.parse(req.body);
 
     // Kiểm tra variant tồn tại
@@ -211,8 +211,8 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
 
 // Xóa biến thể
 export const deleteVariant = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
 
     // Kiểm tra variant có đang được sử dụng trong giỏ hàng hoặc đơn hàng không
     const cartCheck = await pool.query(

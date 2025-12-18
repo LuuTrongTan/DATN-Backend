@@ -12,7 +12,9 @@ export const migration: Migration = {
         -- Điều chỉnh giá theo đơn vị VND, dùng INTEGER để đồng bộ với products.price
         price_adjustment INTEGER DEFAULT 0,
         stock_quantity INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- Soft delete
+        deleted_at TIMESTAMP
       )
     `);
   },

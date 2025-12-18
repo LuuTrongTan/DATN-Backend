@@ -7,10 +7,18 @@ import { logger } from '../../utils/logging';
 
 // UC-08: Thêm sản phẩm vào giỏ hàng
 export const addToCart = async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  let product_id: number | undefined;
+  let variant_id: number | undefined;
+  let quantity: number | undefined;
   try {
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
     const validated = cartItemSchema.parse(req.body);
-    const { product_id, variant_id, quantity } = validated;
-    const userId = req.user!.id;
+    product_id = validated.product_id;
+    variant_id = validated.variant_id;
+    quantity = validated.quantity;
 
     // Check product stock
     let stockQuery = 'SELECT stock_quantity FROM products WHERE id = $1';
@@ -154,9 +162,12 @@ export const getCart = async (req: AuthRequest, res: Response) => {
 
 // UC-10: Xóa sản phẩm khỏi giỏ hàng
 export const removeFromCart = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user?.id;
   try {
-    const { id } = req.params;
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     const result = await pool.query(
       'DELETE FROM cart_items WHERE id = $1 AND user_id = $2 RETURNING id',
@@ -180,10 +191,13 @@ export const removeFromCart = async (req: AuthRequest, res: Response) => {
 
 // UC-11: Sửa sản phẩm trong giỏ hàng
 export const updateCartItem = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const { quantity } = req.body;
+  const userId = req.user?.id;
   try {
-    const { id } = req.params;
-    const { quantity } = req.body;
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     if (!quantity || quantity < 1) {
       return ResponseHandler.error(res, 'Số lượng phải lớn hơn 0', 400);

@@ -11,7 +11,9 @@ export const migration: Migration = {
         description TEXT,
         is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- Soft delete
+        deleted_at TIMESTAMP
       )
     `);
   },

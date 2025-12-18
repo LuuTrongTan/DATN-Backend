@@ -36,7 +36,9 @@ export const migration: Migration = {
         -- Vector embeddings (cho semantic search - cần pgvector extension)
         -- embedding vector(1536), -- OpenAI ada-002 dimension
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- Soft delete
+        deleted_at TIMESTAMP
       )
     `);
 

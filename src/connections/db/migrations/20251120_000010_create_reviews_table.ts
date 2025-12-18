@@ -22,6 +22,8 @@ export const migration: Migration = {
         is_approved BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- Soft delete
+        deleted_at TIMESTAMP,
         UNIQUE(user_id, product_id, order_id)
       )
     `);

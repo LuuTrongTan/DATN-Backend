@@ -7,9 +7,12 @@ import { logger } from '../../utils/logging';
 
 // Create VNPay payment URL
 export const createVNPayPayment = async (req: AuthRequest, res: Response) => {
+  const order_id = req.body.order_id;
+  const userId = req.user?.id;
   try {
-    const { order_id } = req.body;
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     if (!order_id) {
       return ResponseHandler.error(res, 'order_id là bắt buộc', 400);
@@ -130,9 +133,12 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
 
 // Get payment status
 export const getPaymentStatus = async (req: AuthRequest, res: Response) => {
+  const { order_id } = req.params;
+  const userId = req.user?.id;
   try {
-    const { order_id } = req.params;
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     const result = await pool.query(
       'SELECT payment_status, payment_method FROM orders WHERE id = $1 AND user_id = $2',

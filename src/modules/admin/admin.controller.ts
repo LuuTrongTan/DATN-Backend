@@ -68,7 +68,13 @@ export const deleteCategory = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
   
   try {
-    const result = await pool.query('DELETE FROM categories WHERE id = $1 RETURNING id', [id]);
+    const result = await pool.query(
+      `UPDATE categories 
+       SET deleted_at = NOW(), is_active = FALSE, updated_at = NOW()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING id`,
+      [id]
+    );
 
     if (result.rows.length === 0) {
       return ResponseHandler.notFound(res, 'Danh mục không tồn tại');
@@ -277,30 +283,33 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
 
-    let query = 'SELECT id, email, phone, full_name, role, is_active, is_banned, created_at FROM users WHERE 1=1';
+    // Base query (dùng lại cho cả data và count)
+    let baseQuery = 'FROM users WHERE deleted_at IS NULL';
     const params: any[] = [];
     let paramCount = 0;
 
     if (role) {
       paramCount++;
-      query += ` AND role = $${paramCount}`;
+      baseQuery += ` AND role = $${paramCount}`;
       params.push(role);
     }
 
-    paramCount++;
-    query += ` ORDER BY created_at DESC LIMIT $${paramCount}`;
-    params.push(limitNum);
+    // Query dữ liệu (có phân trang)
+    const dataQuery =
+      'SELECT id, email, phone, full_name, role, is_active, is_banned, created_at ' +
+      baseQuery +
+      ` ORDER BY created_at DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+
+    const dataParams = [...params, limitNum, (pageNum - 1) * limitNum];
 
     paramCount++;
-    query += ` OFFSET $${paramCount}`;
-    params.push((pageNum - 1) * limitNum);
+    const countQuery = 'SELECT COUNT(*) ' + baseQuery;
 
-    // Count total
-    const countQuery = query.replace('SELECT id, email, phone, full_name, role, is_active, is_banned, created_at', 'SELECT COUNT(*)');
-    const countResult = await pool.query(countQuery, params.slice(0, -2)); // Remove limit and offset for count
+    // Count total (không ORDER BY / LIMIT / OFFSET)
+    const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].count);
 
-    const result = await pool.query(query, params);
+    const result = await pool.query(dataQuery, dataParams);
 
     return ResponseHandler.paginated(res, result.rows, {
       page: pageNum,
@@ -387,11 +396,15 @@ export const getStatistics = async (req: AuthRequest, res: Response) => {
   try {
     const { start_date, end_date } = req.query;
 
-    let dateFilter = '';
+    let dateFilterOrders = '';
+    let dateFilterOrdersWithAlias = '';
     const params: any[] = [];
     
     if (start_date && end_date) {
-      dateFilter = 'WHERE o.created_at BETWEEN $1 AND $2';
+      // Cho truy vấn chỉ dùng bảng orders (không alias)
+      dateFilterOrders = 'WHERE created_at BETWEEN $1 AND $2';
+      // Cho truy vấn có alias orders là o
+      dateFilterOrdersWithAlias = 'AND o.created_at BETWEEN $1 AND $2';
       params.push(start_date, end_date);
     }
 
@@ -400,7 +413,7 @@ export const getStatistics = async (req: AuthRequest, res: Response) => {
       `SELECT COUNT(*) as total, 
        SUM(total_amount) as revenue,
        COUNT(CASE WHEN order_status = 'delivered' THEN 1 END) as delivered
-       FROM orders ${dateFilter}`,
+       FROM orders ${dateFilterOrders}`,
       params
     );
 
@@ -413,7 +426,8 @@ export const getStatistics = async (req: AuthRequest, res: Response) => {
        FROM order_items oi
        JOIN products p ON oi.product_id = p.id
        JOIN orders o ON oi.order_id = o.id
-       ${dateFilter}
+       WHERE 1=1
+       ${dateFilterOrdersWithAlias}
        GROUP BY p.id, p.name
        ORDER BY total_sold DESC
        LIMIT 10`,

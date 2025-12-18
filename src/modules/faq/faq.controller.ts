@@ -17,7 +17,7 @@ export const getFAQs = async (req: AuthRequest, res: Response) => {
   try {
     const { category } = req.query;
 
-    let query = 'SELECT id, question, answer, category, order_index, is_active, created_at, updated_at FROM faqs WHERE is_active = TRUE';
+    let query = 'SELECT id, question, answer, category, order_index, is_active, created_at, updated_at FROM faqs WHERE is_active = TRUE AND deleted_at IS NULL';
     const params: any[] = [];
 
     if (category) {
@@ -41,7 +41,7 @@ export const getFAQById = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
 
     const result = await pool.query(
-      'SELECT id, question, answer, category, order_index, is_active, created_at, updated_at FROM faqs WHERE id = $1',
+      'SELECT id, question, answer, category, order_index, is_active, created_at, updated_at FROM faqs WHERE id = $1 AND deleted_at IS NULL',
       [id]
     );
 
@@ -153,7 +153,13 @@ export const deleteFAQ = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
 
-    const result = await pool.query('DELETE FROM faqs WHERE id = $1 RETURNING id', [id]);
+    const result = await pool.query(
+      `UPDATE faqs 
+       SET deleted_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING id`,
+      [id]
+    );
 
     if (result.rows.length === 0) {
       return ResponseHandler.notFound(res, 'FAQ không tồn tại');

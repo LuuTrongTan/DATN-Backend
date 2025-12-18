@@ -30,9 +30,12 @@ export const getWishlist = async (req: AuthRequest, res: Response) => {
 
 // Add product to wishlist
 export const addToWishlist = async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  const product_id = req.body.product_id;
   try {
-    const userId = req.user!.id;
-    const { product_id } = req.body;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     if (!product_id) {
       return ResponseHandler.error(res, 'product_id là bắt buộc', 400);
@@ -82,9 +85,12 @@ export const addToWishlist = async (req: AuthRequest, res: Response) => {
 
 // Remove product from wishlist
 export const removeFromWishlist = async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  const { product_id } = req.params;
   try {
-    const userId = req.user!.id;
-    const { product_id } = req.params;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     const result = await pool.query(
       'DELETE FROM wishlist WHERE user_id = $1 AND product_id = $2 RETURNING id',
@@ -108,9 +114,12 @@ export const removeFromWishlist = async (req: AuthRequest, res: Response) => {
 
 // Check if product is in wishlist
 export const checkWishlist = async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  const { product_id } = req.params;
   try {
-    const userId = req.user!.id;
-    const { product_id } = req.params;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     const result = await pool.query(
       'SELECT id FROM wishlist WHERE user_id = $1 AND product_id = $2',

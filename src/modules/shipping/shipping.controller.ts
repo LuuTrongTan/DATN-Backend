@@ -7,8 +7,10 @@ import { logger } from '../../utils/logging';
 
 // Calculate shipping fee
 export const calculateFee = async (req: AuthRequest, res: Response) => {
+  const province = req.body.province;
+  const district = req.body.district;
   try {
-    const { province, district, weight, value } = req.body;
+    const { weight, value } = req.body;
 
     if (!province || !district) {
       return ResponseHandler.error(res, 'Tỉnh/thành phố và quận/huyện là bắt buộc', 400);
@@ -34,9 +36,12 @@ export const calculateFee = async (req: AuthRequest, res: Response) => {
 
 // Get shipping info for order
 export const getShippingInfo = async (req: AuthRequest, res: Response) => {
+  const { order_id } = req.params;
+  const userId = req.user?.id;
   try {
-    const { order_id } = req.params;
-    const userId = req.user!.id;
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
 
     // Check if user owns the order or is admin/staff
     const orderCheck = await pool.query(
@@ -78,8 +83,8 @@ export const getShippingInfo = async (req: AuthRequest, res: Response) => {
 
 // Update shipping info (admin/staff)
 export const updateShippingInfo = async (req: AuthRequest, res: Response) => {
+  const { order_id } = req.params;
   try {
-    const { order_id } = req.params;
     const { tracking_number, shipping_provider, status, notes } = req.body;
 
     // Check if shipping record exists

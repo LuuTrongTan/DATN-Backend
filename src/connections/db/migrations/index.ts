@@ -24,6 +24,10 @@ import * as migration022 from './20251120_000022_create_refunds_table';
 import * as migration023 from './20251120_000023_create_refund_items_table';
 import * as migration024 from './20251120_000024_enable_vector_search';
 import * as migration025 from './20251120_000025_create_payment_transactions_table';
+import * as migration026 from './20251120_000026_create_notifications_table';
+import * as migration027 from './20251120_000027_create_product_tags_table';
+import * as migration028 from './20251120_000028_create_audit_logs_table';
+import * as migration029 from './20251120_000029_create_product_images_table';
 
 export const migrations: MigrationInfo[] = [
   { name: '20251120_000001_create_users_table', migration: migration001.migration },
@@ -49,4 +53,8 @@ export const migrations: MigrationInfo[] = [
   { name: '20251120_000023_create_refund_items_table', migration: migration023.migration },
   { name: '20251120_000024_enable_vector_search', migration: migration024.migration },
   { name: '20251120_000025_create_payment_transactions_table', migration: migration025.migration },
+  { name: '20251120_000026_create_notifications_table', migration: migration026.migration },
+  { name: '20251120_000027_create_product_tags_table', migration: migration027.migration },
+  { name: '20251120_000028_create_audit_logs_table', migration: migration028.migration },
+  { name: '20251120_000029_create_product_images_table', migration: migration029.migration },
 ];

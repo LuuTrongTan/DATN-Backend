@@ -16,7 +16,7 @@ export const getAllReviews = async (req: AuthRequest, res: Response) => {
       FROM reviews r
       JOIN users u ON r.user_id = u.id
       JOIN products p ON r.product_id = p.id
-      WHERE 1=1
+      WHERE r.deleted_at IS NULL
     `;
     const params: any[] = [];
     let paramCount = 0;
@@ -44,7 +44,7 @@ export const getAllReviews = async (req: AuthRequest, res: Response) => {
     const result = await pool.query(query, params);
 
     // Get total count
-    let countQuery = 'SELECT COUNT(*) FROM reviews WHERE 1=1';
+    let countQuery = 'SELECT COUNT(*) FROM reviews WHERE deleted_at IS NULL';
     const countParams: any[] = [];
     let countParamCount = 0;
 
@@ -76,8 +76,8 @@ export const getAllReviews = async (req: AuthRequest, res: Response) => {
 
 // Approve review
 export const approveReview = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
 
     const result = await pool.query(
       'UPDATE reviews SET is_approved = TRUE, updated_at = NOW() WHERE id = $1 RETURNING id, user_id, product_id, order_id, rating, comment, image_urls, video_url, is_approved, created_at, updated_at',
@@ -100,8 +100,8 @@ export const approveReview = async (req: AuthRequest, res: Response) => {
 
 // Reject/Delete review
 export const rejectReview = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
     const { reason } = req.body;
 
     // Option 1: Mark as rejected (soft delete)
@@ -129,10 +129,16 @@ export const rejectReview = async (req: AuthRequest, res: Response) => {
 
 // Delete review (hard delete)
 export const deleteReview = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
 
-    const result = await pool.query('DELETE FROM reviews WHERE id = $1 RETURNING id', [id]);
+    const result = await pool.query(
+      `UPDATE reviews 
+       SET deleted_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING id`,
+      [id]
+    );
 
     if (result.rows.length === 0) {
       return ResponseHandler.notFound(res, 'Đánh giá không tồn tại');
