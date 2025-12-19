@@ -11,8 +11,7 @@ import wishlistRoutes from '../modules/wishlist/wishlist.routes';
 import inventoryRoutes from '../modules/inventory/inventory.routes';
 import paymentRoutes from '../modules/payment/payment.routes';
 import shippingRoutes from '../modules/shipping/shipping.routes';
-import faqRoutes from '../modules/faq/faq.routes';
-import supportRoutes from '../modules/support/support.routes';
+import notificationRoutes from '../modules/notifications/notifications.routes';
 
 const router = express.Router();
 
@@ -29,8 +28,7 @@ router.use('/wishlist', wishlistRoutes);
 router.use('/inventory', inventoryRoutes);
 router.use('/payment', paymentRoutes);
 router.use('/shipping', shippingRoutes);
-router.use('/faq', faqRoutes);
-router.use('/support', supportRoutes);
+router.use('/notifications', notificationRoutes);
 
 export default router;
 

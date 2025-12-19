@@ -9,23 +9,13 @@ export const migration: Migration = {
         category_id INTEGER REFERENCES categories(id),
         -- Thông tin cơ bản
         sku VARCHAR(100) UNIQUE,
-        barcode VARCHAR(100),
         name VARCHAR(255) NOT NULL,
         description TEXT,
         -- Giá cả
         price INTEGER NOT NULL,
         stock_quantity INTEGER DEFAULT 0,
-        -- Hình ảnh và video
-        image_urls TEXT[],
-        video_url VARCHAR(500),
-        -- Vận chuyển
-        weight DECIMAL(10, 2), -- Trọng lượng (gram)
-        dimensions VARCHAR(100), -- Kích thước (cm) - format: "Dài x Rộng x Cao"
         -- Thương hiệu
         brand VARCHAR(100),
-        -- SEO
-        meta_title VARCHAR(255),
-        meta_description TEXT,
         -- Thống kê
         view_count INTEGER DEFAULT 0,
         sold_count INTEGER DEFAULT 0,
@@ -71,11 +61,6 @@ export const migration: Migration = {
       CREATE INDEX IF NOT EXISTS idx_products_search_vector ON products USING GIN(search_vector)
     `);
 
-    // Index cho array (image_urls)
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_products_image_urls ON products USING GIN(image_urls)
-    `);
-
     // Composite index cho search thường dùng
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_products_category_active ON products(category_id, is_active) WHERE is_active = TRUE
@@ -89,7 +74,6 @@ export const migration: Migration = {
   async down(pool: Pool) {
     await pool.query('DROP INDEX IF EXISTS idx_products_price_range');
     await pool.query('DROP INDEX IF EXISTS idx_products_category_active');
-    await pool.query('DROP INDEX IF EXISTS idx_products_image_urls');
     await pool.query('DROP INDEX IF EXISTS idx_products_search_vector');
     await pool.query('DROP INDEX IF EXISTS idx_products_sku');
     await pool.query('DROP INDEX IF EXISTS idx_products_active');

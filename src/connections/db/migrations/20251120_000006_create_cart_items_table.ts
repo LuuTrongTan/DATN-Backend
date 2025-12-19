@@ -6,7 +6,7 @@ export const migration: Migration = {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS cart_items (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
         product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
         variant_id INTEGER REFERENCES product_variants(id),
         quantity INTEGER NOT NULL DEFAULT 1,

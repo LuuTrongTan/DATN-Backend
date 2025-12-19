@@ -9,7 +9,7 @@ export const migration: Migration = {
         order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
         status VARCHAR(20) NOT NULL,
         notes TEXT,
-        updated_by INTEGER REFERENCES users(id),
+        updated_by UUID REFERENCES users(id),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);

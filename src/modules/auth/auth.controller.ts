@@ -107,9 +107,9 @@ export const register = async (req: AuthRequest, res: Response) => {
 
     // Create user với phone đã được verify qua Firebase
     const result = await pool.query(
-      `INSERT INTO users (email, phone, password_hash, is_verified)
-       VALUES (NULL, $1, $2, TRUE)
-       RETURNING id, email, phone, role, is_verified`,
+      `INSERT INTO users (email, phone, password_hash, phone_verified, status)
+       VALUES (NULL, $1, $2, TRUE, 'active')
+       RETURNING id, email, phone, role`,
       [verifiedPhone, passwordHash]
     );
 
@@ -179,7 +179,7 @@ export const resendVerification = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      'SELECT id, email, phone, is_verified FROM users WHERE email = $1 OR phone = $2',
+      'SELECT id, email, phone, phone_verified, email_verified FROM users WHERE email = $1 OR phone = $2',
       [email, phone]
     );
 
@@ -190,14 +190,14 @@ export const resendVerification = async (req: AuthRequest, res: Response) => {
 
     const user = result.rows[0];
 
-    if (user.is_verified) {
+    if ((email && user.email_verified) || (phone && user.phone_verified)) {
       return ResponseHandler.error(res, 'Tài khoản đã được xác thực', 400);
     }
 
     // Check rate limit (1 minute cooldown)
     const recentCode = await pool.query(
       `SELECT created_at FROM verification_codes
-       WHERE user_id = $1 AND type IN ('email_verification', 'otp')
+       WHERE user_id = $1 AND type IN ('verify_email', 'phone')
        ORDER BY created_at DESC LIMIT 1`,
       [user.id]
     );
@@ -218,9 +218,9 @@ export const resendVerification = async (req: AuthRequest, res: Response) => {
 
     // Generate and send new code
     const code = generateCode();
-    const verificationType = email ? 'email_verification' : 'otp';
+    const verificationType = email ? 'verify_email' : 'phone';
     
-    await saveVerificationCode(user.id, code, verificationType, 10);
+    await saveVerificationCode(user.id, code, verificationType, 10, email || phone);
 
     if (email) {
       await sendVerificationEmail(email, code, 'verification');
@@ -261,9 +261,9 @@ export const verify = async (req: AuthRequest, res: Response) => {
     }
 
     const userId = userResult.rows[0].id;
-    const verificationType = email ? 'email_verification' : 'otp';
+    const verificationType = email ? 'verify_email' : 'phone';
 
-    const isValid = await verifyCode(userId, code, verificationType);
+    const isValid = await verifyCode(userId, code, verificationType, email || phone);
 
     if (!isValid) {
       logger.warn('[Verify] Invalid code', { userId, email, phone, ip: req.ip });
@@ -276,7 +276,11 @@ export const verify = async (req: AuthRequest, res: Response) => {
     }
 
     // Update user as verified
-    await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [userId]);
+    if (email) {
+      await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1', [userId]);
+    } else if (phone) {
+      await pool.query('UPDATE users SET phone_verified = TRUE WHERE id = $1', [userId]);
+    }
 
     auditLog('USER_VERIFIED', {
       userId,
@@ -363,7 +367,7 @@ export const forgotPassword = async (req: AuthRequest, res: Response) => {
 
       // Find user by phone
       const userResult = await pool.query(
-        'SELECT id, email, phone, is_active, is_banned FROM users WHERE phone = $1',
+        'SELECT id, email, phone, status FROM users WHERE phone = $1',
         [verifiedPhone]
       );
 
@@ -379,12 +383,11 @@ export const forgotPassword = async (req: AuthRequest, res: Response) => {
 
       const user = userResult.rows[0];
 
-      // Check if account is active and not banned
-      if (!user.is_active || user.is_banned) {
-        logger.warn('[ForgotPassword] Account is inactive or banned', {
+      // Check if account is active
+      if (user.status !== 'active') {
+        logger.warn('[ForgotPassword] Account is not active', {
           userId: user.id,
-          is_active: user.is_active,
-          is_banned: user.is_banned,
+          status: user.status,
           ip: req.ip,
         });
         return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
@@ -435,8 +438,8 @@ export const forgotPassword = async (req: AuthRequest, res: Response) => {
       const user = result.rows[0];
 
       // Generate reset code
-      const code = generateCode();
-      await saveVerificationCode(user.id, code, 'password_reset', 5);
+        const code = generateCode();
+        await saveVerificationCode(user.id, code, 'password_reset', 5, email);
 
       // Send verification email
       try {
@@ -489,7 +492,7 @@ export const login = async (req: AuthRequest, res: Response) => {
 
     // Find user
     const result = await pool.query(
-      `SELECT id, email, phone, password_hash, role, is_verified, is_active, is_banned
+      `SELECT id, email, phone, password_hash, role, status
        FROM users WHERE email = $1 OR phone = $2`,
       [email, phone]
     );
@@ -501,21 +504,8 @@ export const login = async (req: AuthRequest, res: Response) => {
 
     const user = result.rows[0];
 
-    if (!user.is_verified) {
-      logger.warn('[Login] Account not verified', { userId: user.id, ip: req.ip });
-      return ResponseHandler.error(
-        res,
-        'Tài khoản chưa được xác thực',
-        403,
-        {
-          code: 'ACCOUNT_NOT_VERIFIED',
-          details: { suggestion: 'Vui lòng xác thực tài khoản trước khi đăng nhập' },
-        }
-      );
-    }
-
-    if (!user.is_active || user.is_banned) {
-      logger.warn('[Login] Account banned or inactive', { userId: user.id, ip: req.ip });
+    if (user.status !== 'active') {
+      logger.warn('[Login] Account not active', { userId: user.id, status: user.status, ip: req.ip });
       return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
     }
 
@@ -587,7 +577,7 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Xác nhận mật khẩu không khớp', 400);
     }
 
-    const userId = req.user!.id;
+    const userId = String(req.user!.id);
 
     // Get current user password
     const result = await pool.query(
@@ -669,7 +659,7 @@ export const resetPassword = async (req: AuthRequest, res: Response) => {
     const userId = userResult.rows[0].id;
 
     // Verify reset code
-    const isValid = await verifyCode(userId, code, 'password_reset');
+    const isValid = await verifyCode(userId, code, 'password_reset', email);
 
     if (!isValid) {
       logger.warn('[ResetPassword] Invalid code', { userId, email, ip: req.ip });
@@ -875,7 +865,7 @@ export const refreshToken = async (req: AuthRequest, res: Response) => {
       
       // Verify user still exists and is active
       const result = await pool.query(
-        'SELECT id, email, phone, role, is_active, is_banned FROM users WHERE id = $1',
+        'SELECT id, email, phone, role, status FROM users WHERE id = $1',
         [decoded.userId]
       );
 
@@ -885,8 +875,8 @@ export const refreshToken = async (req: AuthRequest, res: Response) => {
 
       const user = result.rows[0];
 
-      if (!user.is_active || user.is_banned) {
-        logger.warn('[RefreshToken] Account banned or inactive', { userId: user.id });
+      if (user.status !== 'active') {
+        logger.warn('[RefreshToken] Account not active', { userId: user.id, status: user.status });
         return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
       }
 
@@ -931,7 +921,7 @@ export const deactivateAccount = async (req: AuthRequest, res: Response) => {
 
     // Check if account is already deactivated
     const userCheck = await pool.query(
-      'SELECT is_active FROM users WHERE id = $1',
+      'SELECT status FROM users WHERE id = $1',
       [userId]
     );
 
@@ -939,13 +929,13 @@ export const deactivateAccount = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.notFound(res, 'Người dùng không tồn tại');
     }
 
-    if (!userCheck.rows[0].is_active) {
+    if (userCheck.rows[0].status !== 'active') {
       return ResponseHandler.error(res, 'Tài khoản đã bị vô hiệu hóa', 400);
     }
 
-    // Soft delete: Set is_active to false
+    // Soft delete: Set status to deleted
     await pool.query(
-      'UPDATE users SET is_active = FALSE, updated_at = NOW() WHERE id = $1',
+      "UPDATE users SET status = 'deleted', updated_at = NOW() WHERE id = $1",
       [userId]
     );
 
@@ -1009,7 +999,7 @@ export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
 
     // Find or create user
     let userResult = await pool.query(
-      'SELECT id, email, phone, role, is_verified FROM users WHERE phone = $1 OR email = $2',
+      'SELECT id, email, phone, role, phone_verified, email_verified, status FROM users WHERE phone = $1 OR email = $2',
       [phoneNumber, userEmail]
     );
 
@@ -1029,8 +1019,8 @@ export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
 
       // Create new user if doesn't exist
       const result = await pool.query(
-        `INSERT INTO users (email, phone, password_hash, is_verified)
-         VALUES ($1, $2, $3, TRUE)
+        `INSERT INTO users (email, phone, password_hash, phone_verified, email_verified, status)
+         VALUES ($1, $2, $3, TRUE, TRUE, 'active')
          RETURNING id, email, phone, role`,
         [userEmail, phoneNumber, passwordHash]
       );
@@ -1055,30 +1045,31 @@ export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
         userId: user.id,
         phone: user.phone,
         email: user.email,
-        isVerified: user.is_verified,
+        phone_verified: user.phone_verified,
+        email_verified: user.email_verified,
+        status: user.status,
       });
       
       // Update user as verified if not already
-      if (!user.is_verified) {
-        logger.info('[VerifyFirebasePhone] Updating user verification status', { userId: user.id });
-        await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [user.id]);
-        user.is_verified = true;
+      if (!user.phone_verified) {
+        logger.info('[VerifyFirebasePhone] Updating phone verification status', { userId: user.id });
+        await pool.query('UPDATE users SET phone_verified = TRUE WHERE id = $1', [user.id]);
+        user.phone_verified = true;
       }
     }
 
-    // Check if user is active and not banned
+    // Check if user is active
     const userStatus = await pool.query(
-      'SELECT is_active, is_banned FROM users WHERE id = $1',
+      'SELECT status FROM users WHERE id = $1',
       [user.id]
     );
 
     if (userStatus.rows.length > 0) {
-      const { is_active, is_banned } = userStatus.rows[0];
-      if (!is_active || is_banned) {
-        logger.warn('[VerifyFirebasePhone] Account is inactive or banned', {
+      const { status } = userStatus.rows[0];
+      if (status !== 'active') {
+        logger.warn('[VerifyFirebasePhone] Account is not active', {
           userId: user.id,
-          is_active,
-          is_banned,
+          status,
           ip: req.ip,
         });
         return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
@@ -1144,7 +1135,7 @@ export const addRecoveryEmail = async (req: AuthRequest, res: Response) => {
   try {
     const validated = addRecoveryEmailSchema.parse(req.body);
     const { email } = validated;
-    const userId = req.user!.id;
+    const userId = String(req.user!.id);
 
     logger.info('[AddRecoveryEmail] Adding recovery email', { userId, email, ip: req.ip });
 
@@ -1178,7 +1169,7 @@ export const addRecoveryEmail = async (req: AuthRequest, res: Response) => {
 
     // Generate verification code
     const code = generateCode();
-    await saveVerificationCode(userId, code, 'email_recovery', 10);
+    await saveVerificationCode(userId, code, 'verify_email', 10, email);
 
     // Send verification email
     try {
@@ -1227,7 +1218,7 @@ export const addRecoveryEmail = async (req: AuthRequest, res: Response) => {
 export const verifyRecoveryEmail = async (req: AuthRequest, res: Response) => {
   try {
     const { code, email } = req.body;
-    const userId = req.user!.id;
+    const userId = String(req.user!.id);
 
     if (!code || !email) {
       return ResponseHandler.error(
@@ -1240,7 +1231,7 @@ export const verifyRecoveryEmail = async (req: AuthRequest, res: Response) => {
     logger.info('[VerifyRecoveryEmail] Verifying recovery email', { userId, email, ip: req.ip });
 
     // Verify code
-    const isValid = await verifyCode(userId, code, 'email_recovery');
+    const isValid = await verifyCode(userId, code, 'verify_email', email);
 
     if (!isValid) {
       logger.warn('[VerifyRecoveryEmail] Invalid code', { userId, email, ip: req.ip });
@@ -1336,7 +1327,7 @@ export const deleteAccount = async (req: AuthRequest, res: Response) => {
     // Ở đây dùng soft delete để giữ lại dữ liệu lịch sử
     await pool.query(
       `UPDATE users 
-       SET is_active = FALSE, is_banned = TRUE, 
+       SET status = 'deleted',
        email = CONCAT(email, '_deleted_', EXTRACT(EPOCH FROM NOW())),
        phone = NULL,
        updated_at = NOW()

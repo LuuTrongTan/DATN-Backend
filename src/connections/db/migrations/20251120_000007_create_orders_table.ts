@@ -6,7 +6,7 @@ export const migration: Migration = {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS orders (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
         order_number VARCHAR(50) UNIQUE NOT NULL,
         -- Thông tin khách hàng (backup khi user bị xóa)
         customer_name VARCHAR(255),
@@ -25,7 +25,7 @@ export const migration: Migration = {
         order_status VARCHAR(20) DEFAULT 'pending',
         -- Hủy đơn hàng
         cancelled_at TIMESTAMP,
-        cancelled_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        cancelled_by UUID REFERENCES users(id) ON DELETE SET NULL,
         cancellation_reason TEXT,
         -- Giao hàng
         delivery_date DATE,

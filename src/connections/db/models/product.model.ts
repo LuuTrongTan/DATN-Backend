@@ -7,8 +7,6 @@ export interface Product {
   description: string | null;
   price: number; // DECIMAL(10, 2)
   stock_quantity: number;
-  image_urls: string[] | null;
-  video_url: string | null;
   is_active: boolean;
   created_at: Date;
   updated_at: Date;
@@ -20,7 +18,6 @@ export interface CreateProductInput {
   description?: string | null;
   price: number;
   stock_quantity: number;
-  image_urls: string[];
   video_url?: string | null;
   is_active?: boolean;
 }
@@ -31,7 +28,6 @@ export interface UpdateProductInput {
   description?: string | null;
   price?: number;
   stock_quantity?: number;
-  image_urls?: string[];
   video_url?: string | null;
   is_active?: boolean;
 }

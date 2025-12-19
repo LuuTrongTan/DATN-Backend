@@ -4,9 +4,10 @@ import { Migration } from './types';
 export const migration: Migration = {
   async up(pool: Pool) {
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS product_images (
+      CREATE TABLE IF NOT EXISTS product_media (
         id SERIAL PRIMARY KEY,
         product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+        type VARCHAR(20) NOT NULL DEFAULT 'image',
         image_url VARCHAR(500) NOT NULL,
         alt_text VARCHAR(255),
         display_order INTEGER DEFAULT 0,
@@ -16,18 +17,18 @@ export const migration: Migration = {
     `);
 
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_product_images_product ON product_images(product_id)
+      CREATE INDEX IF NOT EXISTS idx_product_media_product ON product_media(product_id)
     `);
 
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_product_images_primary ON product_images(product_id, is_primary)
+      CREATE INDEX IF NOT EXISTS idx_product_media_primary ON product_media(product_id, is_primary)
     `);
   },
 
   async down(pool: Pool) {
-    await pool.query('DROP INDEX IF EXISTS idx_product_images_primary');
-    await pool.query('DROP INDEX IF EXISTS idx_product_images_product');
-    await pool.query('DROP TABLE IF EXISTS product_images CASCADE');
+    await pool.query('DROP INDEX IF EXISTS idx_product_media_primary');
+    await pool.query('DROP INDEX IF EXISTS idx_product_media_product');
+    await pool.query('DROP TABLE IF EXISTS product_media CASCADE');
   },
 };
 

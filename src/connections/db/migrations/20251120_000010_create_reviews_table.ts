@@ -6,7 +6,7 @@ export const migration: Migration = {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reviews (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
         product_id INTEGER REFERENCES products(id),
         order_id INTEGER REFERENCES orders(id),
         rating INTEGER CHECK (rating >= 1 AND rating <= 5),
@@ -16,7 +16,7 @@ export const migration: Migration = {
         -- Phản hồi từ shop
         reply TEXT,
         replied_at TIMESTAMP,
-        replied_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        replied_by UUID REFERENCES users(id) ON DELETE SET NULL,
         -- Tương tác
         helpful_count INTEGER DEFAULT 0,
         is_approved BOOLEAN DEFAULT TRUE,

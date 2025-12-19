@@ -10,9 +10,22 @@ export const getWishlist = async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
 
     const result = await pool.query(
-      `SELECT w.*, p.name, p.price, p.image_urls, p.stock_quantity, p.is_active
+      `SELECT 
+         w.*, 
+         p.name, 
+         p.price, 
+         p.stock_quantity, 
+         p.is_active,
+         pm.image_url
        FROM wishlist w
        JOIN products p ON w.product_id = p.id
+       LEFT JOIN LATERAL (
+         SELECT image_url
+         FROM product_media
+         WHERE product_id = p.id AND type = 'image'
+         ORDER BY is_primary DESC, display_order, id
+         LIMIT 1
+       ) pm ON TRUE
        WHERE w.user_id = $1
        ORDER BY w.created_at DESC`,
       [userId]

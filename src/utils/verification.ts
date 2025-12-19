@@ -24,18 +24,19 @@ const transporter = nodemailer.createTransport({
 
 // Save verification code to database
 export const saveVerificationCode = async (
-  userId: number,
+  userId: string | null,
   code: string,
-  type: 'email_verification' | 'password_reset' | 'otp' | 'email_recovery',
-  expiresInMinutes: number = 10
+  type: 'phone' | 'verify_email' | 'change_phone' | 'password_reset' | '2fa',
+  expiresInMinutes: number = 10,
+  contactValue: string,
 ): Promise<void> => {
   const expiresAt = new Date();
   expiresAt.setMinutes(expiresAt.getMinutes() + expiresInMinutes);
 
   await pool.query(
-    `INSERT INTO verification_codes (user_id, code, type, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [userId, code, type, expiresAt]
+    `INSERT INTO verification_codes (user_id, contact_value, code, type, expires_at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [userId, contactValue, code, type, expiresAt]
   );
 };
 
@@ -95,17 +96,21 @@ export const sendOTP = async (phone: string, code: string): Promise<void> => {
 
 // Verify code
 export const verifyCode = async (
-  userId: number,
+  userId: string | null,
   code: string,
-  type: string
+  type: string,
+  contactValue: string,
 ): Promise<boolean> => {
   const result = await pool.query(
     `SELECT * FROM verification_codes
-     WHERE user_id = $1 AND code = $2 AND type = $3
+     WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
+       AND code = $2
+       AND type = $3
+       AND contact_value = $4
      AND is_used = FALSE AND expires_at > NOW()
      ORDER BY created_at DESC
      LIMIT 1`,
-    [userId, code, type]
+    [userId, code, type, contactValue]
   );
 
   if (result.rows.length === 0) {

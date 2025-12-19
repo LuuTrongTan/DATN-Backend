@@ -14,8 +14,9 @@ export const getAddresses = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      `SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at FROM user_addresses 
-       WHERE user_id = $1 
+      `SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at 
+       FROM user_addresses 
+       WHERE user_id = $1 AND deleted_at IS NULL
        ORDER BY is_default DESC, created_at DESC`,
       [userId]
     );
@@ -40,7 +41,9 @@ export const getAddressById = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      'SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at FROM user_addresses WHERE id = $1 AND user_id = $2',
+      `SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at 
+       FROM user_addresses 
+       WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
       [id, userId]
     );
 
@@ -117,7 +120,7 @@ export const updateAddress = async (req: AuthRequest, res: Response) => {
 
     // Check if address exists and belongs to user
     const checkResult = await pool.query(
-      'SELECT id FROM user_addresses WHERE id = $1 AND user_id = $2',
+      'SELECT id FROM user_addresses WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
       [id, userId]
     );
 
@@ -217,7 +220,10 @@ export const deleteAddress = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      'DELETE FROM user_addresses WHERE id = $1 AND user_id = $2 RETURNING id',
+      `UPDATE user_addresses 
+       SET deleted_at = NOW(), is_default = FALSE 
+       WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+       RETURNING id`,
       [id, userId]
     );
 

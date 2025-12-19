@@ -17,10 +17,17 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
     const baseQuery =
       'FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = TRUE AND p.deleted_at IS NULL';
 
-    let query =
+    const selectClause =
       'SELECT p.*, c.name as category_name, ' +
-      'CASE WHEN $1::int IS NULL THEN false ELSE EXISTS (SELECT 1 FROM wishlist w WHERE w.user_id = $1 AND w.product_id = p.id) END as is_in_wishlist ' +
-      baseQuery;
+      // Mảng tất cả ảnh (type = image)
+      '(SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id),' +
+      " ARRAY[]::text[]) FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls, " +
+      // Video đầu tiên (type = video)
+      "(SELECT pm.image_url FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'video' ORDER BY pm.display_order, pm.id LIMIT 1) AS video_url, " +
+      // Flag trong wishlist
+      'CASE WHEN $1::int IS NULL THEN false ELSE EXISTS (SELECT 1 FROM wishlist w WHERE w.user_id = $1 AND w.product_id = p.id) END as is_in_wishlist ';
+
+    let query = selectClause + baseQuery;
 
     const params: any[] = [userId];
     let paramCount = 1;
@@ -57,7 +64,7 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
     }
 
     // Count total
-    const countQuery = query.replace('SELECT p.*, c.name as category_name', 'SELECT COUNT(*)');
+    const countQuery = query.replace(selectClause, 'SELECT COUNT(*) ');
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].count);
 
@@ -97,6 +104,16 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
     const result = await pool.query(
       `SELECT p.*,
               c.name as category_name,
+              -- Tất cả ảnh
+              (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+               FROM product_media pm
+               WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls,
+              -- Video đầu tiên
+              (SELECT pm.image_url
+               FROM product_media pm
+               WHERE pm.product_id = p.id AND pm.type = 'video'
+               ORDER BY pm.display_order, pm.id
+               LIMIT 1) AS video_url,
               CASE WHEN $3::int IS NULL THEN false
                    ELSE EXISTS (
                      SELECT 1 FROM wishlist w
@@ -174,6 +191,16 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
     const result = await pool.query(
       `SELECT p.*,
        c.name as category_name,
+       -- Tất cả ảnh
+       (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+        FROM product_media pm
+        WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls,
+       -- Video đầu tiên
+       (SELECT pm.image_url
+        FROM product_media pm
+        WHERE pm.product_id = p.id AND pm.type = 'video'
+        ORDER BY pm.display_order, pm.id
+        LIMIT 1) AS video_url,
        CASE WHEN $2::int IS NULL THEN false
             ELSE EXISTS (
               SELECT 1 FROM wishlist w
@@ -216,31 +243,11 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
     const price = parseFloat(body.price);
     const stock_quantity = parseInt(body.stock_quantity);
     
-    // Get image URLs from form (if provided as URLs)
-    const imageUrls: string[] = Array.isArray(body.image_urls) 
-      ? body.image_urls 
-      : body.image_urls 
-        ? [body.image_urls] 
-        : [];
-    
     // Get video URL from form (if provided as URL)
     let videoUrl = body.video_url || null;
     
     // Handle file uploads
     const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-    
-    // Upload image files theo storage config
-    if (files?.image_files && files.image_files.length > 0) {
-      const imageFiles = files.image_files.map(file => ({
-        buffer: file.buffer,
-        fileName: file.originalname,
-        mimeType: file.mimetype,
-      }));
-      
-      // Upload theo config (cloudflare, local, hoặc both)
-      const uploadResult = await uploadMultipleFiles(imageFiles);
-      imageUrls.push(...uploadResult.urls);
-    }
     
     // Upload video file theo storage config
     if (files?.video_file && files.video_file.length > 0) {
@@ -262,10 +269,6 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Thiếu thông tin bắt buộc', 400);
     }
     
-    if (imageUrls.length === 0) {
-      return ResponseHandler.error(res, 'Phải có ít nhất 1 hình ảnh', 400);
-    }
-    
     // Check if category exists
     const categoryCheck = await pool.query(
       'SELECT id FROM categories WHERE id = $1',
@@ -278,21 +281,24 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 
     // Insert product into database
     const result = await pool.query(
-      `INSERT INTO products (category_id, name, description, price, stock_quantity, image_urls, video_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, category_id, name, description, price, stock_quantity, image_urls, video_url, is_active, created_at, updated_at`,
-      [
-        category_id,
-        name,
-        description,
-        price,
-        stock_quantity,
-        imageUrls,
-        videoUrl,
-      ]
+      `INSERT INTO products (category_id, name, description, price, stock_quantity)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, category_id, name, description, price, stock_quantity, is_active, created_at, updated_at`,
+      [category_id, name, description, price, stock_quantity]
     );
 
-    return ResponseHandler.created(res, result.rows[0], 'Thêm sản phẩm thành công');
+    const product = result.rows[0];
+
+    // Nếu có videoUrl, lưu vào product_media với type = 'video'
+    if (videoUrl) {
+      await pool.query(
+        `INSERT INTO product_media (product_id, type, image_url, display_order, is_primary)
+         VALUES ($1, 'video', $2, 0, FALSE)`,
+        [product.id, videoUrl]
+    );
+    }
+
+    return ResponseHandler.created(res, product, 'Thêm sản phẩm thành công');
   } catch (error: any) {
     logger.error('Create product error', error instanceof Error ? error : new Error(String(error)), {
       categoryId: category_id,
@@ -321,7 +327,7 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Tên sản phẩm và số lượng không được để trống', 400);
     }
 
-    const allowedFields = ['name', 'description', 'price', 'stock_quantity', 'image_urls', 'video_url', 'category_id'];
+    const allowedFields = ['name', 'description', 'price', 'stock_quantity', 'category_id'];
     const updateFields: string[] = [];
     const values: any[] = [];
     let paramCount = 0;
@@ -344,7 +350,8 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
     values.push(id);
 
     const result = await pool.query(
-      `UPDATE products SET ${updateFields.join(', ')} WHERE id = $${paramCount} RETURNING id, category_id, name, description, price, stock_quantity, image_urls, video_url, is_active, created_at, updated_at`,
+      `UPDATE products SET ${updateFields.join(', ')} WHERE id = $${paramCount}
+       RETURNING id, category_id, name, description, price, stock_quantity, is_active, created_at, updated_at`,
       values
     );
 

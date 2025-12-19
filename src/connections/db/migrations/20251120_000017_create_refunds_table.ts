@@ -8,13 +8,13 @@ export const migration: Migration = {
         id SERIAL PRIMARY KEY,
         refund_number VARCHAR(50) UNIQUE NOT NULL,
         order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
         type VARCHAR(20) NOT NULL CHECK (type IN ('refund', 'return', 'exchange')),
         reason TEXT NOT NULL,
         status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'processing', 'completed', 'cancelled')),
         refund_amount DECIMAL(10, 2),
         admin_notes TEXT,
-        processed_by INTEGER REFERENCES users(id),
+        processed_by UUID REFERENCES users(id),
         processed_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -41,5 +41,6 @@ export const migration: Migration = {
     await pool.query('DROP TABLE IF EXISTS refunds CASCADE');
   },
 };
+
 
 

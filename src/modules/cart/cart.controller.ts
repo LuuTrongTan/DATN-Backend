@@ -102,8 +102,8 @@ export const getCart = async (req: AuthRequest, res: Response) => {
         p.id as product_db_id,
         p.name,
         p.price,
-        p.image_urls,
         p.stock_quantity as product_stock,
+        pm.image_url as product_image_url,
         pv.id as variant_db_id,
         pv.variant_type,
         pv.variant_value,
@@ -111,6 +111,13 @@ export const getCart = async (req: AuthRequest, res: Response) => {
         pv.stock_quantity as variant_stock
        FROM cart_items ci
        JOIN products p ON ci.product_id = p.id
+       LEFT JOIN LATERAL (
+         SELECT image_url
+         FROM product_media
+         WHERE product_id = p.id AND type = 'image'
+         ORDER BY is_primary DESC, display_order, id
+         LIMIT 1
+       ) pm ON TRUE
        LEFT JOIN product_variants pv ON ci.variant_id = pv.id
        WHERE ci.user_id = $1
        ORDER BY ci.created_at DESC`,
@@ -134,8 +141,8 @@ export const getCart = async (req: AuthRequest, res: Response) => {
           id: item.product_db_id,
           name: item.name,
           price: parseFloat(item.price),
-          image_urls: item.image_urls,
           stock_quantity: item.product_stock,
+          image_url: item.product_image_url,
         },
         variant: item.variant_id ? {
           id: item.variant_db_id,

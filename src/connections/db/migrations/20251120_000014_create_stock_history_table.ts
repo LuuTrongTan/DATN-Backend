@@ -13,7 +13,7 @@ export const migration: Migration = {
         previous_stock INTEGER NOT NULL,
         new_stock INTEGER NOT NULL,
         reason TEXT,
-        created_by INTEGER REFERENCES users(id),
+        created_by UUID REFERENCES users(id),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);

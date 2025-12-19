@@ -9,7 +9,7 @@ const resolveUserFromToken = async (token: string) => {
   const decoded = jwt.verify(token, appConfig.jwtSecret) as any;
 
   const result = await pool.query(
-    'SELECT id, email, phone, role, is_active, is_banned FROM users WHERE id = $1',
+    'SELECT id, email, phone, role, status FROM users WHERE id = $1',
     [decoded.userId]
   );
 
@@ -19,7 +19,7 @@ const resolveUserFromToken = async (token: string) => {
 
   const user = result.rows[0];
 
-  if (!user.is_active || user.is_banned) {
+  if (user.status !== 'active') {
     throw new Error('Tài khoản đã bị khóa');
   }
 

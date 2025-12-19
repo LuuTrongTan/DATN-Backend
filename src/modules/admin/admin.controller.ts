@@ -243,8 +243,8 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
     const passwordHash = await bcrypt.hash(defaultPassword, 10);
 
     const result = await pool.query(
-      `INSERT INTO users (email, phone, password_hash, role, is_verified)
-       VALUES ($1, $2, $3, 'staff', TRUE)
+      `INSERT INTO users (email, phone, password_hash, role, email_verified, phone_verified, status)
+       VALUES ($1, $2, $3, 'staff', TRUE, TRUE, 'active')
        RETURNING id, email, phone, role`,
       [email || null, phone || null, passwordHash]
     );
@@ -284,7 +284,7 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
     const limitNum = parseInt(limit as string) || 20;
 
     // Base query (dùng lại cho cả data và count)
-    let baseQuery = 'FROM users WHERE deleted_at IS NULL';
+    let baseQuery = "FROM users WHERE status <> 'deleted'";
     const params: any[] = [];
     let paramCount = 0;
 
@@ -296,7 +296,7 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
     // Query dữ liệu (có phân trang)
     const dataQuery =
-      'SELECT id, email, phone, full_name, role, is_active, is_banned, created_at ' +
+      'SELECT id, email, phone, full_name, role, status, phone_verified, email_verified, created_at ' +
       baseQuery +
       ` ORDER BY created_at DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
 
@@ -324,7 +324,7 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
 export const updateUser = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
-  const { is_active, is_banned, role, email, password } = req.body;
+  const { status, role, email, password, phone_verified, email_verified } = req.body;
   
   try {
 
@@ -332,16 +332,22 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     const values: any[] = [];
     let paramCount = 0;
 
-    if (is_active !== undefined) {
+    if (status !== undefined) {
       paramCount++;
-      updates.push(`is_active = $${paramCount}`);
-      values.push(is_active);
+      updates.push(`status = $${paramCount}`);
+      values.push(status);
     }
 
-    if (is_banned !== undefined) {
+    if (phone_verified !== undefined) {
       paramCount++;
-      updates.push(`is_banned = $${paramCount}`);
-      values.push(is_banned);
+      updates.push(`phone_verified = $${paramCount}`);
+      values.push(phone_verified);
+    }
+
+    if (email_verified !== undefined) {
+      paramCount++;
+      updates.push(`email_verified = $${paramCount}`);
+      values.push(email_verified);
     }
 
     if (role) {
@@ -373,7 +379,8 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     values.push(id);
 
     const result = await pool.query(
-      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING id, email, phone, role, is_active, is_banned`,
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount}
+       RETURNING id, email, phone, full_name, role, status, phone_verified, email_verified`,
       values
     );
 

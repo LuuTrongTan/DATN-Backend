@@ -1,0 +1,399 @@
+// Diagram of XgameProject Database
+// Use https://dbdiagram.io to visualize this
+
+Table users {
+  id uuid [pk, default: `uuid_generate_v4()`]
+  phone varchar(15) [unique, not null, note: 'REQUIRED - Đăng ký chỉ qua phone']
+  email varchar(255) [unique, note: 'OPTIONAL - User thêm sau khi đã có account']
+  password_hash varchar(255) [not null]
+  full_name varchar(255)
+  avatar_url varchar(500)
+  phone_verified boolean [default: false, note: 'TRUE sau khi verify OTP đăng ký']
+  email_verified boolean [default: false, note: 'TRUE sau khi user thêm email và verify']
+  status varchar [default: 'active', note: 'enum: active, banned, deleted']
+  role varchar(20) [default: 'customer']
+  date_of_birth date
+  gender varchar(10)
+  last_login_at timestamp
+  created_at timestamp
+  updated_at timestamp
+  
+  indexes {
+    phone [name: 'idx_users_phone']
+    email [name: 'idx_users_email']
+    role [name: 'idx_users_role']
+    status [name: 'idx_users_status']
+    (role, status) [name: 'idx_users_role_status']
+    last_login_at [name: 'idx_users_last_login']
+  }
+}
+
+Table verification_codes {
+  id integer [pk]
+  user_id uuid
+  contact_value varchar(255) [not null, note: 'Gộp phone và email: phone khi type=phone/change_phone, email khi type=verify_email/password_reset']
+  code varchar(10) [not null]
+  type varchar [not null, note: 'enum: phone (đăng ký), verify_email (xác thực email), change_phone (đổi số điện thoại), password_reset, 2fa']
+  expires_at timestamp [not null]
+  is_used boolean [default: false]
+  attempts integer [default: 0]
+  created_at timestamp
+  
+  indexes {
+    user_id [name: 'idx_verification_codes_user']
+    contact_value [name: 'idx_verification_codes_contact']
+    code [name: 'idx_verification_codes_code']
+    (type, expires_at) [name: 'idx_verification_codes_type_expires']
+    (contact_value, type) [name: 'idx_verification_codes_contact_type']
+  }
+}
+
+Table categories {
+  id integer [pk]
+  parent_id integer [ref: > categories.id, note: 'NULL = danh mục gốc, có giá trị = danh mục con']
+  name varchar(255) [not null]
+  slug varchar(255) [unique, not null, note: 'SEO-friendly URL, ví dụ: ao-thun, quan-jeans']
+  image_url varchar(500)
+  description text
+  display_order integer [default: 0, note: 'Thứ tự hiển thị (số nhỏ hiển thị trước)']
+  is_active boolean [default: true]
+  created_at timestamp
+  updated_at timestamp
+  deleted_at timestamp
+  
+  indexes {
+    parent_id [name: 'idx_categories_parent']
+    slug [name: 'idx_categories_slug']
+    (is_active, deleted_at) [name: 'idx_categories_active']
+    (display_order, is_active) [name: 'idx_categories_display_order']
+  }
+}
+
+Table products {
+  id integer [pk]
+  category_id integer
+  sku varchar(100) [unique]
+  name varchar(255) [not null]
+  description text
+  price integer [not null]
+  stock_quantity integer [default: 0]
+  brand varchar(100)
+  view_count integer [default: 0]
+  sold_count integer [default: 0]
+  is_active boolean [default: true]
+  search_vector text [note: 'Full-text search vector - tự động tạo từ name + description bằng trigger hoặc application code']
+  created_at timestamp
+  updated_at timestamp
+  deleted_at timestamp
+}
+
+Table product_variants {
+  id integer [pk]
+  product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
+  sku varchar(100) [unique, note: 'SKU riêng cho từng biến thể, ví dụ: AO-THUN-001-M-DO']
+  variant_type varchar(50) [not null, note: 'Loại biến thể: Size, Color, Material, Style...']
+  variant_value varchar(100) [not null, note: 'Giá trị: M, L, XL hoặc Đỏ, Xanh...']
+  price_adjustment integer [default: 0, note: 'Điều chỉnh giá so với giá gốc (VND), +50000 = tăng 50k, -30000 = giảm 30k']
+  stock_quantity integer [default: 0, note: 'Số lượng tồn kho của biến thể này']
+  image_url varchar(500) [note: 'Ảnh riêng cho biến thể (ví dụ: màu khác nhau có ảnh khác nhau)']
+  is_active boolean [default: true, note: 'Ẩn/hiện biến thể']
+  created_at timestamp
+  updated_at timestamp
+  deleted_at timestamp
+  
+  indexes {
+    product_id [name: 'idx_product_variants_product']
+    sku [name: 'idx_product_variants_sku']
+    variant_type [name: 'idx_product_variants_type']
+    (is_active, deleted_at) [name: 'idx_product_variants_active']
+    (product_id, is_active) [name: 'idx_product_variants_product_active']
+  }
+  
+  Note: 'Constraint UNIQUE (product_id, variant_type, variant_value) - đảm bảo không trùng biến thể'
+}
+
+Table product_media {
+  id integer [pk]
+  product_id integer
+  type varchar(20) [default: 'image', note: 'image | video']
+  image_url varchar(500) [not null]
+  alt_text varchar(255)
+  display_order integer [default: 0]
+  is_primary boolean [default: false]
+  created_at timestamp
+}
+
+Table product_tags {
+  id integer [pk]
+  name varchar(100) [unique, not null]
+  slug varchar(100) [unique, not null]
+  created_at timestamp
+}
+
+Table product_tag_relations {
+  product_id integer [pk]
+  tag_id integer [pk]
+  created_at timestamp
+}
+
+Table cart_items {
+  id integer [pk]
+  user_id uuid
+  product_id integer
+  variant_id integer
+  quantity integer [not null, default: 1]
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table orders {
+  id integer [pk]
+  user_id uuid
+  order_number varchar(50) [unique, not null]
+  customer_name varchar(255)
+  customer_phone varchar(10)
+  customer_email varchar(255)
+  subtotal decimal(10, 2) [not null]
+  discount_amount decimal(10, 2) [default: 0]
+  tax_amount decimal(10, 2) [default: 0]
+  shipping_fee decimal(10, 2) [default: 0]
+  total_amount decimal(10, 2) [not null]
+  shipping_address text [not null]
+  payment_method varchar(50) [not null]
+  payment_status varchar(20) [default: 'pending']
+  order_status varchar(20) [default: 'pending']
+  cancelled_at timestamp
+  cancelled_by uuid
+  cancellation_reason text
+  delivery_date date
+  notes text
+  created_at timestamp
+  updated_at timestamp
+  deleted_at timestamp
+}
+
+Table order_items {
+  id integer [pk]
+  order_id integer
+  product_id integer
+  variant_id integer
+  quantity integer [not null]
+  price integer [not null]
+  created_at timestamp
+}
+
+Table order_status_history {
+  id integer [pk]
+  order_id integer
+  status varchar(20) [not null]
+  notes text
+  updated_by uuid
+  created_at timestamp
+}
+
+Table shipping {
+  id integer [pk]
+  order_id integer
+  shipping_provider varchar(50)
+  tracking_number varchar(100)
+  shipping_fee decimal(10, 2) [not null]
+  estimated_delivery_date timestamp
+  status varchar(20) [default: 'pending']
+  notes text
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table payment_transactions {
+  id integer [pk]
+  order_id integer
+  transaction_id varchar(100) [unique]
+  payment_gateway varchar(50) [not null]
+  amount decimal(10, 2) [not null]
+  status varchar(20) [not null, default: 'pending']
+  response_data jsonb
+  error_message text
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table reviews {
+  id integer [pk]
+  user_id uuid
+  product_id integer
+  order_id integer
+  rating integer
+  comment text
+  image_urls varchar[]
+  video_url varchar(500)
+  reply text
+  replied_at timestamp
+  replied_by uuid
+  helpful_count integer [default: 0]
+  is_approved boolean [default: true]
+  created_at timestamp
+  updated_at timestamp
+  deleted_at timestamp
+}
+
+Table refunds {
+  id integer [pk]
+  refund_number varchar(50) [unique, not null]
+  order_id integer
+  user_id uuid
+  type varchar(20) [not null]
+  reason text [not null]
+  status varchar(20) [default: 'pending']
+  refund_amount decimal(10, 2)
+  admin_notes text
+  processed_by uuid
+  processed_at timestamp
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table refund_items {
+  id integer [pk]
+  refund_id integer
+  order_item_id integer
+  quantity integer [not null]
+  refund_amount decimal(10, 2) [not null]
+  reason text
+  created_at timestamp
+}
+
+Table user_addresses {
+  id integer [pk]
+  user_id uuid
+  full_name varchar(255) [not null]
+  phone varchar(10) [not null, note: 'Số điện thoại Việt Nam (10 số)']
+  province varchar(100) [not null]
+  district varchar(100) [not null]
+  ward varchar(100) [not null]
+  street_address text [not null]
+  is_default boolean [default: false]
+  created_at timestamp
+  updated_at timestamp
+  deleted_at timestamp [note: 'Soft delete - địa chỉ bị xóa']
+  
+  indexes {
+    user_id [name: 'idx_user_addresses_user']
+    (user_id, is_default) [name: 'idx_user_addresses_default']
+    deleted_at [name: 'idx_user_addresses_deleted_at']
+    (user_id, deleted_at) [name: 'idx_user_addresses_user_not_deleted']
+  }
+}
+
+Table wishlist {
+  id integer [pk]
+  user_id uuid
+  product_id integer
+  created_at timestamp
+}
+
+Table stock_history {
+  id integer [pk]
+  product_id integer
+  variant_id integer
+  type varchar(20) [not null]
+  quantity integer [not null]
+  previous_stock integer [not null]
+  new_stock integer [not null]
+  reason text
+  created_by uuid
+  created_at timestamp
+}
+
+Table stock_alerts {
+  id integer [pk]
+  product_id integer
+  variant_id integer
+  threshold integer [not null, default: 10]
+  current_stock integer [not null]
+  is_notified boolean [default: false]
+  notified_at timestamp
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table daily_statistics {
+  id integer [pk]
+  date date [unique, not null]
+  total_orders integer [default: 0]
+  total_revenue decimal(10, 2) [default: 0]
+  total_users integer [default: 0]
+  created_at timestamp
+}
+
+// faqs & support_tickets & ticket_messages đã bỏ – không dùng luồng FAQ / ticket hỗ trợ nữa
+
+Table notifications {
+  id integer [pk]
+  user_id uuid
+  type varchar [not null, note: 'enum: order_placed, order_shipped, order_delivered, order_cancelled, payment_success, payment_failed, review_request, promotion, system, support_ticket']
+  title varchar(255) [not null]
+  message text [not null]
+  link varchar(500)
+  is_read boolean [default: false]
+  created_at timestamp
+}
+
+Table audit_logs {
+  id integer [pk]
+  user_id uuid
+  action varchar(100) [not null]
+  table_name varchar(100) [not null]
+  record_id integer
+  old_data jsonb [note: 'Dữ liệu đã được lọc/mask các trường nhạy cảm (password, credit_card, v.v.)']
+  new_data jsonb [note: 'Dữ liệu đã được lọc/mask các trường nhạy cảm']
+  severity varchar(20) [default: 'info', note: 'enum: info, warning, critical']
+  created_at timestamp
+  expires_at timestamp [note: 'Tự động xóa sau 2 năm (retention policy)']
+  
+  indexes {
+    (table_name, record_id) [name: 'idx_audit_logs_table_record']
+    user_id [name: 'idx_audit_logs_user']
+    created_at [name: 'idx_audit_logs_created_at']
+    expires_at [name: 'idx_audit_logs_expires_at']
+    severity [name: 'idx_audit_logs_severity']
+  }
+}
+
+// Relationships
+Ref: verification_codes.user_id > users.id
+Ref: products.category_id > categories.id
+Ref: product_media.product_id > products.id
+Ref: product_tag_relations.product_id > products.id
+Ref: product_tag_relations.tag_id > product_tags.id
+Ref: cart_items.user_id > users.id
+Ref: cart_items.product_id > products.id
+Ref: cart_items.variant_id > product_variants.id
+Ref: orders.user_id > users.id
+Ref: orders.cancelled_by > users.id
+Ref: order_items.order_id > orders.id
+Ref: order_items.product_id > products.id
+Ref: order_items.variant_id > product_variants.id
+Ref: order_status_history.order_id > orders.id
+Ref: order_status_history.updated_by > users.id
+Ref: shipping.order_id > orders.id
+Ref: payment_transactions.order_id > orders.id
+Ref: reviews.user_id > users.id
+Ref: reviews.product_id > products.id
+Ref: reviews.order_id > orders.id
+Ref: reviews.replied_by > users.id
+Ref: refunds.order_id > orders.id
+Ref: refunds.user_id > users.id
+Ref: refunds.processed_by > users.id
+Ref: refund_items.refund_id > refunds.id
+Ref: refund_items.order_item_id > order_items.id
+Ref: user_addresses.user_id > users.id
+Ref: wishlist.user_id > users.id
+Ref: wishlist.product_id > products.id
+Ref: stock_history.product_id > products.id
+Ref: stock_history.variant_id > product_variants.id
+Ref: stock_history.created_by > users.id
+Ref: stock_alerts.product_id > products.id
+Ref: stock_alerts.variant_id > product_variants.id
+Ref: notifications.user_id > users.id
+Ref: audit_logs.user_id > users.id
+
