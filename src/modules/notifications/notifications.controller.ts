@@ -42,12 +42,18 @@ export const markAsRead = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.unauthorized(res, 'Người dùng chưa đăng nhập');
     }
 
+    // Parse id to integer since notifications.id is integer type
+    const notificationId = parseInt(id, 10);
+    if (isNaN(notificationId)) {
+      return ResponseHandler.badRequest(res, 'ID thông báo không hợp lệ');
+    }
+
     const result = await pool.query(
       `UPDATE notifications
        SET is_read = TRUE
        WHERE id = $1 AND user_id = $2
        RETURNING id, user_id, type, title, message, link, is_read, created_at`,
-      [id, userId]
+      [notificationId, userId]
     );
 
     if (result.rows.length === 0) {
@@ -114,5 +120,6 @@ export const createNotification = async (params: {
     });
   }
 };
+
 
 

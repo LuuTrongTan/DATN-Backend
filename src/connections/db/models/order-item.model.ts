@@ -1,12 +1,12 @@
-// OrderItem Model - Based on migration 008_create_order_items_table
+// OrderItem Model - Based on database_schema.dbml
 
 export interface OrderItem {
   id: number;
   order_id: number;
   product_id: number;
   variant_id: number | null;
-  quantity: number;
-  price: number; // DECIMAL(10, 2)
+  quantity: number; // not null
+  price: number; // integer (VND) - not null
   created_at: Date;
 }
 
@@ -14,7 +14,7 @@ export interface CreateOrderItemInput {
   order_id: number;
   product_id: number;
   variant_id?: number | null;
-  quantity: number;
-  price: number;
+  quantity: number; // REQUIRED
+  price: number; // REQUIRED - integer (VND)
 }
 

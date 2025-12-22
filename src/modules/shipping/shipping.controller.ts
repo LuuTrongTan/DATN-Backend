@@ -43,9 +43,9 @@ export const getShippingInfo = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
     }
 
-    // Check if user owns the order or is admin/staff
+    // Check if user owns the order or is admin/staff, only for orders not soft-deleted
     const orderCheck = await pool.query(
-      'SELECT id, user_id FROM orders WHERE id = $1',
+      'SELECT id, user_id FROM orders WHERE id = $1 AND deleted_at IS NULL',
       [order_id]
     );
 

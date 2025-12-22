@@ -4,6 +4,7 @@ import { pool } from '../../connections';
 import { reviewSchema } from './reviews.validation';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
+import { ORDER_STATUS } from '../../constants';
 
 // UC-14: Đánh giá sản phẩm
 export const createReview = async (req: AuthRequest, res: Response) => {
@@ -15,12 +16,12 @@ export const createReview = async (req: AuthRequest, res: Response) => {
     }
     validated = reviewSchema.parse(req.body);
 
-    // Check if order exists and is delivered
+    // Check if order exists and is delivered (not deleted)
     const orderCheck = await pool.query(
       `SELECT id, order_status, created_at 
        FROM orders 
-       WHERE id = $1 AND user_id = $2 AND order_status = 'delivered'`,
-      [validated.order_id, userId]
+       WHERE id = $1 AND user_id = $2 AND order_status = $3 AND deleted_at IS NULL`,
+      [validated.order_id, userId, ORDER_STATUS.DELIVERED]
     );
 
     if (orderCheck.rows.length === 0) {
@@ -36,9 +37,9 @@ export const createReview = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Đơn hàng đã quá 1 tuần, không thể đánh giá', 400);
     }
 
-    // Check if already reviewed
+    // Check if already reviewed (not deleted)
     const existingReview = await pool.query(
-      'SELECT id FROM reviews WHERE user_id = $1 AND product_id = $2 AND order_id = $3',
+      'SELECT id FROM reviews WHERE user_id = $1 AND product_id = $2 AND order_id = $3 AND deleted_at IS NULL',
       [userId, validated.product_id, validated.order_id]
     );
 
@@ -96,14 +97,14 @@ export const getProductReviews = async (req: AuthRequest, res: Response) => {
       `SELECT r.id, r.user_id, r.product_id, r.order_id, r.rating, r.comment, r.image_urls, r.video_url, r.is_approved, r.created_at, r.updated_at, u.full_name, u.email
        FROM reviews r
        JOIN users u ON r.user_id = u.id
-       WHERE r.product_id = $1 AND r.is_approved = TRUE
+       WHERE r.product_id = $1 AND r.is_approved = TRUE AND r.deleted_at IS NULL
        ORDER BY r.created_at DESC
        LIMIT $2 OFFSET $3`,
       [productId, limitNum, (pageNum - 1) * limitNum]
     );
 
     const countResult = await pool.query(
-      'SELECT COUNT(*) FROM reviews WHERE product_id = $1 AND is_approved = TRUE',
+      'SELECT COUNT(*) FROM reviews WHERE product_id = $1 AND is_approved = TRUE AND deleted_at IS NULL',
       [productId]
     );
 

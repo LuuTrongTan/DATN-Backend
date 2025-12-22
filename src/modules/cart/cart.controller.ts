@@ -20,19 +20,29 @@ export const addToCart = async (req: AuthRequest, res: Response) => {
     variant_id = validated.variant_id;
     quantity = validated.quantity;
 
-    // Check product stock
-    let stockQuery = 'SELECT stock_quantity FROM products WHERE id = $1';
+    // Check product stock (with soft delete + active check)
+    let stockQuery = 'SELECT stock_quantity FROM products WHERE id = $1 AND deleted_at IS NULL AND is_active = TRUE';
     if (variant_id) {
-      stockQuery = 'SELECT stock_quantity FROM product_variants WHERE id = $1';
+      stockQuery =
+        'SELECT pv.stock_quantity FROM product_variants pv JOIN products p ON pv.product_id = p.id ' +
+        'WHERE pv.id = $1 AND pv.deleted_at IS NULL AND pv.is_active = TRUE ' +
+        'AND p.deleted_at IS NULL AND p.is_active = TRUE';
     }
 
     const stockResult = await pool.query(stockQuery, [variant_id || product_id]);
     
     if (stockResult.rows.length === 0) {
-      return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
+      return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại hoặc đã bị xóa/vô hiệu');
     }
 
-    const availableStock = parseInt(stockResult.rows[0].stock_quantity);
+    const rawStock = stockResult.rows[0].stock_quantity;
+    if (rawStock === null || rawStock === undefined) {
+      return ResponseHandler.error(res, 'Không xác định được tồn kho sản phẩm', 400, {
+        code: 'STOCK_NOT_AVAILABLE',
+      });
+    }
+
+    const availableStock = parseInt(rawStock);
 
     // Check existing cart item
     const existingItem = await pool.query(
@@ -110,7 +120,7 @@ export const getCart = async (req: AuthRequest, res: Response) => {
         pv.price_adjustment,
         pv.stock_quantity as variant_stock
        FROM cart_items ci
-       JOIN products p ON ci.product_id = p.id
+       JOIN products p ON ci.product_id = p.id AND p.deleted_at IS NULL AND p.is_active = TRUE
        LEFT JOIN LATERAL (
          SELECT image_url
          FROM product_media
@@ -118,7 +128,7 @@ export const getCart = async (req: AuthRequest, res: Response) => {
          ORDER BY is_primary DESC, display_order, id
          LIMIT 1
        ) pm ON TRUE
-       LEFT JOIN product_variants pv ON ci.variant_id = pv.id
+       LEFT JOIN product_variants pv ON ci.variant_id = pv.id AND pv.deleted_at IS NULL AND pv.is_active = TRUE
        WHERE ci.user_id = $1
        ORDER BY ci.created_at DESC`,
       [userId]
@@ -210,12 +220,12 @@ export const updateCartItem = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Số lượng phải lớn hơn 0', 400);
     }
 
-    // Get cart item with product info
+    // Get cart item with product info (not deleted, active)
     const cartItem = await pool.query(
       `SELECT ci.*, p.stock_quantity as product_stock, pv.stock_quantity as variant_stock
        FROM cart_items ci
-       JOIN products p ON ci.product_id = p.id
-       LEFT JOIN product_variants pv ON ci.variant_id = pv.id
+       JOIN products p ON ci.product_id = p.id AND p.deleted_at IS NULL AND p.is_active = TRUE
+       LEFT JOIN product_variants pv ON ci.variant_id = pv.id AND pv.deleted_at IS NULL AND pv.is_active = TRUE
        WHERE ci.id = $1 AND ci.user_id = $2`,
       [id, userId]
     );

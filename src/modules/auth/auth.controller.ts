@@ -25,6 +25,7 @@ import { appConfig } from '../../connections/config/app.config';
 import { ResponseHandler } from '../../utils/response';
 import { logger, auditLog } from '../../utils/logging';
 import { LoginResponse, AuthResponse, RefreshTokenResponse } from '../../types/response.types';
+import { USER_STATUS, USER_ROLE } from '../../constants';
 
 // UC-01: Đăng ký chỉ bằng số điện thoại (bắt buộc Firebase ID token)
 export const register = async (req: AuthRequest, res: Response) => {
@@ -108,9 +109,9 @@ export const register = async (req: AuthRequest, res: Response) => {
     // Create user với phone đã được verify qua Firebase
     const result = await pool.query(
       `INSERT INTO users (email, phone, password_hash, phone_verified, status)
-       VALUES (NULL, $1, $2, TRUE, 'active')
+       VALUES (NULL, $1, $2, TRUE, $3)
        RETURNING id, email, phone, role`,
-      [verifiedPhone, passwordHash]
+      [verifiedPhone, passwordHash, USER_STATUS.ACTIVE]
     );
 
     const user = result.rows[0];
@@ -126,28 +127,42 @@ export const register = async (req: AuthRequest, res: Response) => {
       phone: verifiedPhone,
     });
 
+    // Ensure user.id is string (UUID from PostgreSQL)
+    const userId = String(user.id);
+
     // Generate JWT access token (phone đã verify nên trả token ngay)
     const token = jwt.sign(
-      { userId: user.id, role: user.role },
+      { userId, role: user.role },
       appConfig.jwtSecret as string,
       { expiresIn: appConfig.jwtExpiresIn } as any
     );
 
     // Generate refresh token
     const refreshToken = jwt.sign(
-      { userId: user.id, role: user.role, type: 'refresh' },
+      { userId, role: user.role, type: 'refresh' },
       appConfig.jwtSecret as string,
       { expiresIn: '30d' } as any
     );
+
+    // Fetch full user data including full_name and verification status
+    const fullUserResult = await pool.query(
+      'SELECT id, email, phone, full_name, role, email_verified, phone_verified, created_at FROM users WHERE id = $1',
+      [user.id]
+    );
+    const fullUser = fullUserResult.rows[0];
 
     const responseData: LoginResponse = {
       token,
       refreshToken,
       user: {
-        id: user.id,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
+        id: fullUser.id,
+        email: fullUser.email,
+        phone: fullUser.phone,
+        full_name: fullUser.full_name,
+        role: fullUser.role,
+        email_verified: fullUser.email_verified,
+        phone_verified: fullUser.phone_verified,
+        created_at: fullUser.created_at,
       },
     };
 
@@ -171,8 +186,8 @@ export const register = async (req: AuthRequest, res: Response) => {
 
 // UC-02: Gửi lại mã xác nhận
 export const resendVerification = async (req: AuthRequest, res: Response) => {
+  const { email, phone } = req.body;
   try {
-    const { email, phone } = req.body;
 
     if (!email && !phone) {
       return ResponseHandler.error(res, 'Phải cung cấp email hoặc số điện thoại', 400);
@@ -233,14 +248,21 @@ export const resendVerification = async (req: AuthRequest, res: Response) => {
 
     return ResponseHandler.success(res, null, 'Đã gửi lại mã xác nhận thành công');
   } catch (error: any) {
+    logger.error('[ResendVerification] Error resending verification code', {
+      error: error.message,
+      stack: error.stack,
+      email,
+      phone,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi gửi lại mã xác nhận', error);
   }
 };
 
 // UC-03: Xác thực
 export const verify = async (req: AuthRequest, res: Response) => {
+  const { code, email, phone } = req.body;
   try {
-    const { code, email, phone } = req.body;
 
     if (!code) {
       return ResponseHandler.error(res, 'Mã xác thực không được để trống', 400);
@@ -293,6 +315,13 @@ export const verify = async (req: AuthRequest, res: Response) => {
 
     return ResponseHandler.success(res, null, 'Xác thực thành công');
   } catch (error: any) {
+    logger.error('[Verify] Error verifying account', {
+      error: error.message,
+      stack: error.stack,
+      email,
+      phone,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi xác thực', error);
   }
 };
@@ -384,7 +413,7 @@ export const forgotPassword = async (req: AuthRequest, res: Response) => {
       const user = userResult.rows[0];
 
       // Check if account is active
-      if (user.status !== 'active') {
+      if (user.status !== USER_STATUS.ACTIVE) {
         logger.warn('[ForgotPassword] Account is not active', {
           userId: user.id,
           status: user.status,
@@ -504,7 +533,7 @@ export const login = async (req: AuthRequest, res: Response) => {
 
     const user = result.rows[0];
 
-    if (user.status !== 'active') {
+    if (user.status !== USER_STATUS.ACTIVE) {
       logger.warn('[Login] Account not active', { userId: user.id, status: user.status, ip: req.ip });
       return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
     }
@@ -517,16 +546,19 @@ export const login = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.unauthorized(res, 'Thông tin đăng nhập không đúng');
     }
 
+    // Ensure user.id is string (UUID from PostgreSQL)
+    const userId = String(user.id);
+
     // Generate JWT access token
     const token = jwt.sign(
-      { userId: user.id, role: user.role },
+      { userId, role: user.role },
       appConfig.jwtSecret as string,
       { expiresIn: appConfig.jwtExpiresIn } as any
     );
 
     // Generate refresh token (longer expiry, e.g., 30 days)
     const refreshToken = jwt.sign(
-      { userId: user.id, role: user.role, type: 'refresh' },
+      { userId, role: user.role, type: 'refresh' },
       appConfig.jwtSecret as string,
       { expiresIn: '30d' } as any
     );
@@ -540,14 +572,25 @@ export const login = async (req: AuthRequest, res: Response) => {
 
     logger.info('[Login] User logged in successfully', { userId: user.id, email: user.email, phone: user.phone });
 
+    // Fetch full user data including full_name and verification status
+    const fullUserResult = await pool.query(
+      'SELECT id, email, phone, full_name, role, email_verified, phone_verified, created_at FROM users WHERE id = $1',
+      [user.id]
+    );
+    const fullUser = fullUserResult.rows[0];
+
     const responseData: LoginResponse = {
       token,
       refreshToken,
       user: {
-        id: user.id,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
+        id: fullUser.id,
+        email: fullUser.email,
+        phone: fullUser.phone,
+        full_name: fullUser.full_name,
+        role: fullUser.role,
+        email_verified: fullUser.email_verified,
+        phone_verified: fullUser.phone_verified,
+        created_at: fullUser.created_at,
       },
     };
 
@@ -611,6 +654,12 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
 
     return ResponseHandler.success(res, null, 'Đổi mật khẩu thành công');
   } catch (error: any) {
+    logger.error('[ChangePassword] Error changing password', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user?.id,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi đổi mật khẩu', error);
   }
 };
@@ -619,7 +668,7 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
 export const getCurrentUser = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
-      'SELECT id, email, phone, full_name, role, created_at FROM users WHERE id = $1',
+      'SELECT id, email, phone, full_name, role, email_verified, phone_verified, created_at FROM users WHERE id = $1',
       [req.user!.id]
     );
 
@@ -633,15 +682,23 @@ export const getCurrentUser = async (req: AuthRequest, res: Response) => {
 
     return ResponseHandler.success(res, responseData, 'Lấy thông tin user thành công');
   } catch (error: any) {
+    logger.error('[GetCurrentUser] Error getting current user', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user?.id,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin user', error);
   }
 };
 
 // Reset Password (chỉ dùng cho email recovery với code OTP)
 export const resetPassword = async (req: AuthRequest, res: Response) => {
+  let email: string | undefined;
   try {
     const validated = resetPasswordSchema.parse(req.body);
-    const { code, email, newPassword } = validated;
+    email = validated.email;
+    const { code, newPassword } = validated;
 
     logger.info('[ResetPassword] Resetting password with OTP code', { email, ip: req.ip });
 
@@ -691,11 +748,17 @@ export const resetPassword = async (req: AuthRequest, res: Response) => {
     return ResponseHandler.success(res, null, 'Đặt lại mật khẩu thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
+      logger.warn('[ResetPassword] Validation error', {
+        errors: error.errors,
+        email,
+        ip: req.ip,
+      });
       return ResponseHandler.validationError(res, error.errors);
     }
     logger.error('[ResetPassword] Password reset error', {
       error: error.message,
       stack: error.stack,
+      email,
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi đặt lại mật khẩu', error);
@@ -724,6 +787,12 @@ export const logout = async (req: AuthRequest, res: Response) => {
 
     return ResponseHandler.success(res, null, 'Đăng xuất thành công');
   } catch (error: any) {
+    logger.error('[Logout] Error during logout', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user?.id,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi đăng xuất', error);
   }
 };
@@ -766,6 +835,8 @@ export const updateProfile = async (req: AuthRequest, res: Response) => {
       paramCount++;
       updateFields.push(`email = $${paramCount}`);
       values.push(email);
+      // Reset email_verified khi email thay đổi (cast boolean để PostgreSQL nhận diện)
+      updateFields.push(`email_verified = FALSE`);
     }
 
     if (phone !== undefined) {
@@ -778,21 +849,25 @@ export const updateProfile = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Không có trường nào để cập nhật', 400);
     }
 
-    paramCount++;
+    // updated_at không dùng parameter nên không tăng paramCount
     updateFields.push(`updated_at = NOW()`);
     paramCount++;
     values.push(userId);
 
     const result = await pool.query(
-      `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${paramCount} RETURNING id, email, phone, full_name, role`,
+      `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${paramCount} RETURNING id, email, phone, full_name, role, email_verified, phone_verified`,
       values
     );
 
-    auditLog('PROFILE_UPDATED', {
-      userId,
-      updates: { full_name, email, phone },
-      ip: req.ip,
-    });
+    try {
+      auditLog('PROFILE_UPDATED', {
+        userId,
+        updates: { full_name, email, phone },
+        ip: req.ip,
+      });
+    } catch (auditError: any) {
+      logger.warn('[UpdateProfile] Failed to log audit', { error: auditError.message });
+    }
 
     logger.info('[UpdateProfile] Profile updated successfully', { userId, updates: { full_name, email, phone } });
 
@@ -802,9 +877,22 @@ export const updateProfile = async (req: AuthRequest, res: Response) => {
 
     return ResponseHandler.success(res, responseData, 'Cập nhật thông tin thành công');
   } catch (error: any) {
+    logger.error('[UpdateProfile] Error updating profile', { 
+      userId: req.user?.id, 
+      error: error.message, 
+      stack: error.stack,
+      body: req.body 
+    });
+    
     if (error.name === 'ZodError') {
       return ResponseHandler.validationError(res, error.errors);
     }
+    
+    // Log chi tiết lỗi để debug
+    if (error.code) {
+      logger.error('[UpdateProfile] Database error', { code: error.code, detail: error.detail });
+    }
+    
     return ResponseHandler.internalError(res, 'Lỗi khi cập nhật thông tin', error);
   }
 };
@@ -841,8 +929,19 @@ export const verifyPassword = async (req: AuthRequest, res: Response) => {
     return ResponseHandler.success(res, { verified: true }, 'Xác thực mật khẩu thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
+      logger.warn('[VerifyPassword] Validation error', {
+        errors: error.errors,
+        userId: req.user?.id,
+        ip: req.ip,
+      });
       return ResponseHandler.validationError(res, error.errors);
     }
+    logger.error('[VerifyPassword] Error verifying password', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user?.id,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi xác thực mật khẩu', error);
   }
 };
@@ -875,21 +974,24 @@ export const refreshToken = async (req: AuthRequest, res: Response) => {
 
       const user = result.rows[0];
 
-      if (user.status !== 'active') {
+      if (user.status !== USER_STATUS.ACTIVE) {
         logger.warn('[RefreshToken] Account not active', { userId: user.id, status: user.status });
         return ResponseHandler.forbidden(res, 'Tài khoản đã bị khóa');
       }
 
+      // Ensure user.id is string (UUID from PostgreSQL)
+      const userId = String(user.id);
+
       // Generate new access token
       const newToken = jwt.sign(
-        { userId: user.id, role: user.role },
+        { userId, role: user.role },
         appConfig.jwtSecret as string,
         { expiresIn: appConfig.jwtExpiresIn } as any
       );
 
       // Generate new refresh token
       const newRefreshToken = jwt.sign(
-        { userId: user.id, role: user.role, type: 'refresh' },
+        { userId, role: user.role, type: 'refresh' },
         appConfig.jwtSecret as string,
         { expiresIn: '30d' } as any
       );
@@ -902,14 +1004,27 @@ export const refreshToken = async (req: AuthRequest, res: Response) => {
       };
 
       return ResponseHandler.success(res, responseData, 'Làm mới token thành công');
-    } catch (jwtError) {
-      logger.warn('[RefreshToken] Invalid or expired token', { ip: req.ip });
+    } catch (jwtError: any) {
+      logger.warn('[RefreshToken] Invalid or expired token', {
+        error: jwtError.message,
+        stack: jwtError.stack,
+        ip: req.ip,
+      });
       return ResponseHandler.unauthorized(res, 'Refresh token không hợp lệ hoặc đã hết hạn');
     }
   } catch (error: any) {
     if (error.name === 'ZodError') {
+      logger.warn('[RefreshToken] Validation error', {
+        errors: error.errors,
+        ip: req.ip,
+      });
       return ResponseHandler.validationError(res, error.errors);
     }
+    logger.error('[RefreshToken] Error refreshing token', {
+      error: error.message,
+      stack: error.stack,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi làm mới token', error);
   }
 };
@@ -929,14 +1044,14 @@ export const deactivateAccount = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.notFound(res, 'Người dùng không tồn tại');
     }
 
-    if (userCheck.rows[0].status !== 'active') {
+    if (userCheck.rows[0].status !== USER_STATUS.ACTIVE) {
       return ResponseHandler.error(res, 'Tài khoản đã bị vô hiệu hóa', 400);
     }
 
     // Soft delete: Set status to deleted
     await pool.query(
-      "UPDATE users SET status = 'deleted', updated_at = NOW() WHERE id = $1",
-      [userId]
+      'UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2',
+      [USER_STATUS.DELETED, userId]
     );
 
     auditLog('ACCOUNT_DEACTIVATED', {
@@ -948,6 +1063,12 @@ export const deactivateAccount = async (req: AuthRequest, res: Response) => {
 
     return ResponseHandler.success(res, null, 'Vô hiệu hóa tài khoản thành công');
   } catch (error: any) {
+    logger.error('[DeactivateAccount] Error deactivating account', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user?.id,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi vô hiệu hóa tài khoản', error);
   }
 };
@@ -1020,9 +1141,9 @@ export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
       // Create new user if doesn't exist
       const result = await pool.query(
         `INSERT INTO users (email, phone, password_hash, phone_verified, email_verified, status)
-         VALUES ($1, $2, $3, TRUE, TRUE, 'active')
+         VALUES ($1, $2, $3, TRUE, TRUE, $4)
          RETURNING id, email, phone, role`,
-        [userEmail, phoneNumber, passwordHash]
+        [userEmail, phoneNumber, passwordHash, USER_STATUS.ACTIVE]
       );
       user = result.rows[0];
       
@@ -1066,7 +1187,7 @@ export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
 
     if (userStatus.rows.length > 0) {
       const { status } = userStatus.rows[0];
-      if (status !== 'active') {
+      if (status !== USER_STATUS.ACTIVE) {
         logger.warn('[VerifyFirebasePhone] Account is not active', {
           userId: user.id,
           status,
@@ -1076,18 +1197,21 @@ export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    logger.info('[VerifyFirebasePhone] Generating JWT tokens', { userId: user.id });
+    // Ensure user.id is string (UUID from PostgreSQL)
+    const userId = String(user.id);
+
+    logger.info('[VerifyFirebasePhone] Generating JWT tokens', { userId });
 
     // Generate JWT access token
     const token = jwt.sign(
-      { userId: user.id, role: user.role },
+      { userId, role: user.role },
       appConfig.jwtSecret as string,
       { expiresIn: appConfig.jwtExpiresIn } as any
     );
 
     // Generate refresh token
     const refreshToken = jwt.sign(
-      { userId: user.id, role: user.role, type: 'refresh' },
+      { userId, role: user.role, type: 'refresh' },
       appConfig.jwtSecret as string,
       { expiresIn: '30d' } as any
     );
@@ -1106,14 +1230,25 @@ export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
       role: user.role,
     });
 
+    // Fetch full user data including full_name and verification status
+    const fullUserResult = await pool.query(
+      'SELECT id, email, phone, full_name, role, email_verified, phone_verified, created_at FROM users WHERE id = $1',
+      [user.id]
+    );
+    const fullUser = fullUserResult.rows[0];
+
     const responseData: LoginResponse = {
       token,
       refreshToken,
       user: {
-        id: user.id,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
+        id: fullUser.id,
+        email: fullUser.email,
+        phone: fullUser.phone,
+        full_name: fullUser.full_name,
+        role: fullUser.role,
+        email_verified: fullUser.email_verified,
+        phone_verified: fullUser.phone_verified,
+        created_at: fullUser.created_at,
       },
     };
 
@@ -1132,9 +1267,10 @@ export const verifyFirebasePhone = async (req: AuthRequest, res: Response) => {
 
 // Add Recovery Email (Thêm email để khôi phục tài khoản)
 export const addRecoveryEmail = async (req: AuthRequest, res: Response) => {
+  let email: string | undefined;
   try {
     const validated = addRecoveryEmailSchema.parse(req.body);
-    const { email } = validated;
+    email = validated.email;
     const userId = String(req.user!.id);
 
     logger.info('[AddRecoveryEmail] Adding recovery email', { userId, email, ip: req.ip });
@@ -1203,11 +1339,19 @@ export const addRecoveryEmail = async (req: AuthRequest, res: Response) => {
     );
   } catch (error: any) {
     if (error.name === 'ZodError') {
+      logger.warn('[AddRecoveryEmail] Validation error', {
+        errors: error.errors,
+        userId: req.user?.id,
+        email,
+        ip: req.ip,
+      });
       return ResponseHandler.validationError(res, error.errors);
     }
     logger.error('[AddRecoveryEmail] Error adding recovery email', {
       error: error.message,
       stack: error.stack,
+      userId: req.user?.id,
+      email,
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi thêm email khôi phục', error);
@@ -1322,17 +1466,15 @@ export const deleteAccount = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.unauthorized(res, 'Mật khẩu không đúng');
     }
 
-    // Soft delete: Set is_active to false and mark as deleted
-    // Hoặc hard delete nếu muốn (DELETE FROM users)
-    // Ở đây dùng soft delete để giữ lại dữ liệu lịch sử
+    // Soft delete: Set status to deleted
     await pool.query(
       `UPDATE users 
-       SET status = 'deleted',
+       SET status = $1,
        email = CONCAT(email, '_deleted_', EXTRACT(EPOCH FROM NOW())),
        phone = NULL,
        updated_at = NOW()
-       WHERE id = $1`,
-      [userId]
+       WHERE id = $2`,
+      [USER_STATUS.DELETED, userId]
     );
 
     auditLog('ACCOUNT_DELETED', {
@@ -1345,8 +1487,19 @@ export const deleteAccount = async (req: AuthRequest, res: Response) => {
     return ResponseHandler.success(res, null, 'Xóa tài khoản thành công');
   } catch (error: any) {
     if (error.name === 'ZodError') {
+      logger.warn('[DeleteAccount] Validation error', {
+        errors: error.errors,
+        userId: req.user?.id,
+        ip: req.ip,
+      });
       return ResponseHandler.validationError(res, error.errors);
     }
+    logger.error('[DeleteAccount] Error deleting account', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user?.id,
+      ip: req.ip,
+    });
     return ResponseHandler.internalError(res, 'Lỗi khi xóa tài khoản', error);
   }
 };

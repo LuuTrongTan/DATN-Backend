@@ -7,21 +7,42 @@ import { sendOrderStatusUpdateEmail } from '../../utils/email.service';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 import { appConfig } from '../../connections/config/app.config';
+import { ORDER_STATUS, USER_ROLE, USER_STATUS } from '../../constants';
 
 // UC-18, UC-19, UC-20: Quản lý danh mục
 export const createCategory = async (req: AuthRequest, res: Response) => {
-  const { name, image_url, description } = req.body;
+  const { name, slug, image_url, description, parent_id, display_order, is_active } = req.body;
   
   try {
-    if (!name) {
-      return ResponseHandler.error(res, 'Tên danh mục không được để trống', 400);
+    if (!name || !slug) {
+      return ResponseHandler.error(res, 'Tên và slug danh mục không được để trống', 400);
+    }
+
+    // Check unique slug (only non-deleted)
+    const slugCheck = await pool.query(
+      'SELECT id FROM categories WHERE slug = $1 AND deleted_at IS NULL',
+      [slug]
+    );
+    if (slugCheck.rows.length > 0) {
+      return ResponseHandler.conflict(res, 'Slug danh mục đã tồn tại');
+    }
+
+    // Validate parent_id (nếu có) phải tồn tại và chưa bị xóa
+    if (parent_id) {
+      const parentCheck = await pool.query(
+        'SELECT id FROM categories WHERE id = $1 AND deleted_at IS NULL',
+        [parent_id]
+      );
+      if (parentCheck.rows.length === 0) {
+        return ResponseHandler.notFound(res, 'Danh mục cha không tồn tại hoặc đã bị xóa');
+      }
     }
 
     const result = await pool.query(
-      `INSERT INTO categories (name, image_url, description)
-       VALUES ($1, $2, $3)
-       RETURNING id, name, image_url, description, is_active, created_at, updated_at`,
-      [name, image_url || null, description || null]
+      `INSERT INTO categories (name, slug, parent_id, image_url, description, display_order, is_active)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6, 0), COALESCE($7, TRUE))
+       RETURNING id, name, slug, parent_id, image_url, description, display_order, is_active, created_at, updated_at`,
+      [name, slug, parent_id || null, image_url || null, description || null, display_order, is_active]
     );
 
     return ResponseHandler.created(res, result.rows[0], 'Thêm danh mục thành công');
@@ -36,18 +57,79 @@ export const createCategory = async (req: AuthRequest, res: Response) => {
 
 export const updateCategory = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
-  const { name, image_url, description } = req.body;
+  const { name, slug, parent_id, image_url, description, display_order, is_active } = req.body;
   
   try {
+    // Check category exists (not deleted)
+    const exists = await pool.query('SELECT id, slug FROM categories WHERE id = $1 AND deleted_at IS NULL', [id]);
+    if (exists.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Danh mục không tồn tại');
+    }
+
+    // If slug change, ensure unique
+    if (slug && slug !== exists.rows[0].slug) {
+      const slugCheck = await pool.query(
+        'SELECT id FROM categories WHERE slug = $1 AND id != $2 AND deleted_at IS NULL',
+        [slug, id]
+      );
+      if (slugCheck.rows.length > 0) {
+        return ResponseHandler.conflict(res, 'Slug danh mục đã tồn tại');
+      }
+    }
+
+    // Validate parent_id (nếu gửi) phải khác chính nó và còn tồn tại
+    if (parent_id !== undefined) {
+      if (parent_id === id) {
+        return ResponseHandler.error(res, 'Danh mục không thể là cha của chính nó', 400);
+      }
+      if (parent_id) {
+        const parentCheck = await pool.query(
+          'SELECT id FROM categories WHERE id = $1 AND deleted_at IS NULL',
+          [parent_id]
+        );
+        if (parentCheck.rows.length === 0) {
+          return ResponseHandler.notFound(res, 'Danh mục cha không tồn tại hoặc đã bị xóa');
+        }
+      }
+    }
+
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramCount = 0;
+
+    const fields: Record<string, any> = {
+      name,
+      slug,
+      parent_id,
+      image_url,
+      description,
+      display_order,
+      is_active,
+    };
+
+    for (const [field, value] of Object.entries(fields)) {
+      if (value !== undefined) {
+        paramCount++;
+        updates.push(`${field} = $${paramCount}`);
+        values.push(value === '' ? null : value);
+      }
+    }
+
+    if (updates.length === 0) {
+      return ResponseHandler.error(res, 'Không có trường nào để cập nhật', 400);
+    }
+
+    // updated_at
+    updates.push('updated_at = NOW()');
+    values.push(id);
+    paramCount++;
+
     const result = await pool.query(
       `UPDATE categories 
-       SET name = COALESCE($1, name),
-           image_url = COALESCE($2, image_url),
-           description = COALESCE($3, description),
-           updated_at = NOW()
-       WHERE id = $4
-       RETURNING id, name, image_url, description, is_active, created_at, updated_at`,
-      [name, image_url, description, id]
+       SET ${updates.join(', ')}
+       WHERE id = $${paramCount} AND deleted_at IS NULL
+       RETURNING id, name, slug, parent_id, image_url, description, display_order, is_active, created_at, updated_at`,
+      values
     );
 
     if (result.rows.length === 0) {
@@ -68,6 +150,24 @@ export const deleteCategory = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
   
   try {
+    // Chặn xóa nếu còn danh mục con
+    const childCount = await pool.query(
+      'SELECT COUNT(*) FROM categories WHERE parent_id = $1 AND deleted_at IS NULL',
+      [id]
+    );
+    if (parseInt(childCount.rows[0].count) > 0) {
+      return ResponseHandler.error(res, 'Không thể xóa danh mục còn danh mục con', 400);
+    }
+
+    // Chặn xóa nếu còn sản phẩm tham chiếu
+    const productCount = await pool.query(
+      'SELECT COUNT(*) FROM products WHERE category_id = $1 AND deleted_at IS NULL',
+      [id]
+    );
+    if (parseInt(productCount.rows[0].count) > 0) {
+      return ResponseHandler.error(res, 'Không thể xóa danh mục đang được dùng bởi sản phẩm', 400);
+    }
+
     const result = await pool.query(
       `UPDATE categories 
        SET deleted_at = NOW(), is_active = FALSE, updated_at = NOW()
@@ -90,6 +190,183 @@ export const deleteCategory = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// Lấy danh sách danh mục cho admin (đầy đủ thông tin)
+export const getCategoriesAdmin = async (req: AuthRequest, res: Response) => {
+  const includeDeleted = String(req.query.include_deleted || 'false') === 'true';
+
+  try {
+    const baseQuery = `
+      SELECT id, name, slug, parent_id, image_url, description, display_order, is_active, created_at, updated_at, deleted_at
+      FROM categories
+    `;
+
+    const query = includeDeleted
+      ? `${baseQuery} ORDER BY display_order NULLS LAST, name ASC`
+      : `${baseQuery} WHERE deleted_at IS NULL ORDER BY display_order NULLS LAST, name ASC`;
+
+    const result = await pool.query(query);
+
+    return ResponseHandler.success(res, result.rows, 'Lấy danh sách danh mục (admin) thành công');
+  } catch (error: any) {
+    logger.error('Error fetching categories (admin)', error instanceof Error ? error : new Error(String(error)));
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách danh mục', error);
+  }
+};
+
+// Lấy chi tiết danh mục cho admin (đầy đủ thông tin)
+export const getCategoryAdmin = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const includeDeleted = String(req.query.include_deleted || 'false') === 'true';
+
+  try {
+    const result = await pool.query(
+      `
+        SELECT id, name, slug, parent_id, image_url, description, display_order, is_active, created_at, updated_at, deleted_at
+        FROM categories
+        WHERE id = $1 ${includeDeleted ? '' : 'AND deleted_at IS NULL'}
+      `,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Danh mục không tồn tại');
+    }
+
+    return ResponseHandler.success(res, result.rows[0], 'Lấy thông tin danh mục (admin) thành công');
+  } catch (error: any) {
+    logger.error('Error fetching category (admin)', error instanceof Error ? error : new Error(String(error)), { categoryId: id });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin danh mục', error);
+  }
+};
+
+// Khôi phục danh mục đã bị xóa mềm (admin)
+export const restoreCategoryAdmin = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    // Lấy thông tin danh mục, bao gồm cả đã xóa mềm
+    const existing = await pool.query(
+      'SELECT id, name, slug, deleted_at FROM categories WHERE id = $1',
+      [id]
+    );
+
+    if (existing.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Danh mục không tồn tại');
+    }
+
+    const category = existing.rows[0];
+
+    if (category.deleted_at === null) {
+      return ResponseHandler.error(res, 'Danh mục đang hoạt động, không cần khôi phục', 400);
+    }
+
+    // Đảm bảo slug vẫn unique trong các danh mục chưa xóa
+    const slugCheck = await pool.query(
+      'SELECT id FROM categories WHERE slug = $1 AND id != $2 AND deleted_at IS NULL',
+      [category.slug, id]
+    );
+
+    if (slugCheck.rows.length > 0) {
+      return ResponseHandler.conflict(
+        res,
+        'Không thể khôi phục vì slug danh mục đã được sử dụng bởi danh mục khác'
+      );
+    }
+
+    const result = await pool.query(
+      `UPDATE categories
+       SET deleted_at = NULL,
+           is_active = TRUE,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, name, slug, parent_id, image_url, description, display_order, is_active, created_at, updated_at, deleted_at`,
+      [id]
+    );
+
+    return ResponseHandler.success(res, result.rows[0], 'Khôi phục danh mục thành công');
+  } catch (error: any) {
+    logger.error(
+      'Error restoring category (admin)',
+      error instanceof Error ? error : new Error(String(error)),
+      { categoryId: id }
+    );
+    return ResponseHandler.internalError(res, 'Lỗi khi khôi phục danh mục', error);
+  }
+};
+
+// Lấy danh sách sản phẩm cho admin (bao gồm inactive/deleted tùy include_deleted)
+export const getProductsAdmin = async (req: AuthRequest, res: Response) => {
+  const { search, category_id, include_deleted } = req.query;
+  const includeDeleted = String(include_deleted || 'false') === 'true';
+
+  try {
+    const params: any[] = [];
+    let idx = 0;
+    let where = 'WHERE 1=1';
+
+    if (!includeDeleted) {
+      where += ' AND p.deleted_at IS NULL';
+    }
+
+    if (category_id) {
+      idx++;
+      where += ` AND p.category_id = $${idx}`;
+      params.push(category_id);
+    }
+
+    if (search) {
+      idx++;
+      const q = `%${search}%`;
+      where += ` AND (p.name ILIKE $${idx} OR p.sku ILIKE $${idx})`;
+      params.push(q);
+    }
+
+    const query = `
+      SELECT p.*,
+             c.name as category_name
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      ${where}
+      ORDER BY p.created_at DESC
+      LIMIT 200
+    `;
+
+    const result = await pool.query(query, params);
+
+    return ResponseHandler.success(res, result.rows, 'Lấy danh sách sản phẩm (admin) thành công');
+  } catch (error: any) {
+    logger.error('Error fetching products (admin)', error instanceof Error ? error : new Error(String(error)));
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách sản phẩm', error);
+  }
+};
+
+// Lấy chi tiết sản phẩm cho admin
+export const getProductAdmin = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      `
+        SELECT p.*,
+               c.name as category_name
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE p.id = $1
+      `,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
+    }
+
+    return ResponseHandler.success(res, result.rows[0], 'Lấy thông tin sản phẩm (admin) thành công');
+  } catch (error: any) {
+    logger.error('Error fetching product (admin)', error instanceof Error ? error : new Error(String(error)), { productId: id });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin sản phẩm', error);
+  }
+};
+
 // UC-21: Xử lý đơn hàng
 export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
@@ -97,7 +374,7 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
   
   try {
 
-    const validStatuses = ['pending', 'confirmed', 'processing', 'shipping', 'delivered', 'cancelled'];
+    const validStatuses = Object.values(ORDER_STATUS);
     if (!validStatuses.includes(status)) {
       return ResponseHandler.error(res, 'Trạng thái đơn hàng không hợp lệ', 400);
     }
@@ -106,7 +383,7 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
     const orderResult = await pool.query(
       `UPDATE orders 
        SET order_status = $1, updated_at = NOW()
-       WHERE id = $2
+       WHERE id = $2 AND deleted_at IS NULL
        RETURNING id, user_id, order_number, total_amount, order_status, payment_status, shipping_address, payment_method, shipping_fee, notes, created_at, updated_at`,
       [status, id]
     );
@@ -165,7 +442,7 @@ export const getAllOrders = async (req: AuthRequest, res: Response) => {
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
 
-    let query = 'SELECT id, user_id, order_number, total_amount, order_status, payment_status, shipping_address, payment_method, shipping_fee, notes, created_at, updated_at FROM orders WHERE 1=1';
+    let query = 'SELECT id, user_id, order_number, total_amount, order_status, payment_status, shipping_address, payment_method, shipping_fee, notes, created_at, updated_at FROM orders WHERE deleted_at IS NULL';
     const params: any[] = [];
     let paramCount = 0;
 
@@ -221,17 +498,21 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
 
     // Check if user exists
     const existingUser = await pool.query(
-      'SELECT id, role FROM users WHERE email = $1 OR phone = $2',
+      'SELECT id, role, status FROM users WHERE (email = $1 OR phone = $2)',
       [email, phone]
     );
 
     if (existingUser.rows.length > 0) {
       const user = existingUser.rows[0];
       
-      if (user.role === 'customer') {
+      if (user.status === USER_STATUS.DELETED) {
+        return ResponseHandler.error(res, 'Tài khoản đã bị xóa', 400);
+      }
+
+      if (user.role === USER_ROLE.CUSTOMER) {
         // Update role to staff
-        await pool.query('UPDATE users SET role = $1 WHERE id = $2', ['staff', user.id]);
-        return ResponseHandler.success(res, { userId: user.id, role: 'staff' }, 'Đã cập nhật role thành staff');
+        await pool.query('UPDATE users SET role = $1 WHERE id = $2', [USER_ROLE.STAFF, user.id]);
+        return ResponseHandler.success(res, { userId: user.id, role: USER_ROLE.STAFF }, 'Đã cập nhật role thành staff');
       } else {
         return ResponseHandler.error(res, 'Tài khoản đã là staff hoặc admin', 400);
       }
@@ -244,9 +525,9 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
 
     const result = await pool.query(
       `INSERT INTO users (email, phone, password_hash, role, email_verified, phone_verified, status)
-       VALUES ($1, $2, $3, 'staff', TRUE, TRUE, 'active')
+       VALUES ($1, $2, $3, $4, TRUE, TRUE, $5)
        RETURNING id, email, phone, role`,
-      [email || null, phone || null, passwordHash]
+      [email || null, phone || null, passwordHash, USER_ROLE.STAFF, USER_STATUS.ACTIVE]
     );
 
     // TODO: Send password via email instead of returning in response
@@ -284,9 +565,10 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
     const limitNum = parseInt(limit as string) || 20;
 
     // Base query (dùng lại cho cả data và count)
-    let baseQuery = "FROM users WHERE status <> 'deleted'";
+    let baseQuery = 'FROM users WHERE status <> $1';
     const params: any[] = [];
-    let paramCount = 0;
+    let paramCount = 1;
+    params.push(USER_STATUS.DELETED);
 
     if (role) {
       paramCount++;
@@ -333,6 +615,9 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     let paramCount = 0;
 
     if (status !== undefined) {
+      if (!Object.values(USER_STATUS).includes(status)) {
+        return ResponseHandler.error(res, 'Trạng thái không hợp lệ', 400);
+      }
       paramCount++;
       updates.push(`status = $${paramCount}`);
       values.push(status);
@@ -351,6 +636,9 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     }
 
     if (role) {
+      if (!Object.values(USER_ROLE).includes(role)) {
+        return ResponseHandler.error(res, 'Vai trò không hợp lệ', 400);
+      }
       paramCount++;
       updates.push(`role = $${paramCount}`);
       values.push(role);
@@ -420,12 +708,12 @@ export const getStatistics = async (req: AuthRequest, res: Response) => {
       `SELECT COUNT(*) as total, 
        SUM(total_amount) as revenue,
        COUNT(CASE WHEN order_status = 'delivered' THEN 1 END) as delivered
-       FROM orders ${dateFilterOrders}`,
+       FROM orders WHERE deleted_at IS NULL ${dateFilterOrders ? 'AND created_at BETWEEN $1 AND $2' : ''}`,
       params
     );
 
     // Total users
-    const usersResult = await pool.query('SELECT COUNT(*) as total FROM users');
+    const usersResult = await pool.query('SELECT COUNT(*) as total FROM users WHERE status <> $1', [USER_STATUS.DELETED]);
 
     // Top products
     const topProductsResult = await pool.query(
@@ -433,7 +721,7 @@ export const getStatistics = async (req: AuthRequest, res: Response) => {
        FROM order_items oi
        JOIN products p ON oi.product_id = p.id
        JOIN orders o ON oi.order_id = o.id
-       WHERE 1=1
+       WHERE o.deleted_at IS NULL
        ${dateFilterOrdersWithAlias}
        GROUP BY p.id, p.name
        ORDER BY total_sold DESC

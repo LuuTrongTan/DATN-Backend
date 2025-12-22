@@ -4,9 +4,27 @@ import { pool } from '../connections';
 import { appConfig } from '../connections/config/app.config';
 import { AuthRequest } from '../types/request.types';
 import { ResponseHandler } from '../utils/response';
+import { logger } from '../utils/logging';
+import { USER_STATUS } from '../constants';
+
+const isValidUuid = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  // Định dạng UUID v4 cơ bản, đủ để tránh các giá trị như "1"
+  const uuidRegex =
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+  return uuidRegex.test(value);
+};
 
 const resolveUserFromToken = async (token: string) => {
   const decoded = jwt.verify(token, appConfig.jwtSecret) as any;
+
+  // Bảo vệ khi userId trong token không đúng định dạng UUID
+  if (!isValidUuid(decoded.userId)) {
+    logger.warn('[Auth] Invalid userId format in token', {
+      userId: decoded.userId,
+    });
+    throw new Error('Token không hợp lệ');
+  }
 
   const result = await pool.query(
     'SELECT id, email, phone, role, status FROM users WHERE id = $1',
@@ -19,7 +37,7 @@ const resolveUserFromToken = async (token: string) => {
 
   const user = result.rows[0];
 
-  if (user.status !== 'active') {
+  if (user.status !== USER_STATUS.ACTIVE) {
     throw new Error('Tài khoản đã bị khóa');
   }
 
@@ -47,7 +65,8 @@ export const authenticate = async (
 
     next();
   } catch (error: any) {
-    return ResponseHandler.unauthorized(res, error.message || 'Token không hợp lệ');
+    // Không trả message lỗi chi tiết từ database cho client
+    return ResponseHandler.unauthorized(res, 'Token không hợp lệ');
   }
 };
 

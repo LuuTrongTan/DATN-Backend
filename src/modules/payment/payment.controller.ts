@@ -4,6 +4,7 @@ import { pool } from '../../connections';
 import { createPaymentUrl, verifyPaymentCallback } from './vnpay.service';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
+import { ORDER_STATUS, PAYMENT_STATUS } from '../../constants';
 
 // Create VNPay payment URL
 export const createVNPayPayment = async (req: AuthRequest, res: Response) => {
@@ -18,9 +19,9 @@ export const createVNPayPayment = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'order_id là bắt buộc', 400);
     }
 
-    // Get order
+    // Get order (not deleted)
     const orderResult = await pool.query(
-      'SELECT id, order_number, total_amount, payment_status, user_id FROM orders WHERE id = $1 AND user_id = $2',
+      'SELECT id, order_number, total_amount, payment_status, user_id FROM orders WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
       [order_id, userId]
     );
 
@@ -30,7 +31,7 @@ export const createVNPayPayment = async (req: AuthRequest, res: Response) => {
 
     const order = orderResult.rows[0];
 
-    if (order.payment_status === 'paid') {
+    if (order.payment_status === PAYMENT_STATUS.PAID) {
       return ResponseHandler.error(res, 'Đơn hàng đã được thanh toán', 400);
     }
 
@@ -77,9 +78,11 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
       return res.redirect(`${frontendUrl}/orders?payment=error`);
     }
 
-    // Find order by order_number
+    // Find order by order_number (not deleted)
     const orderResult = await pool.query(
-      'SELECT id, order_number, payment_status, order_status FROM orders WHERE order_number = $1',
+      `SELECT id, order_number, payment_status, order_status, total_amount 
+       FROM orders 
+       WHERE order_number = $1 AND deleted_at IS NULL`,
       [verification.orderNumber]
     );
 
@@ -91,30 +94,136 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
 
     const order = orderResult.rows[0];
 
-    // Update payment status
-    if (verification.responseCode === '00') {
-      // Payment successful
-      await pool.query(
-        `UPDATE orders 
-         SET payment_status = 'paid', 
-             order_status = CASE WHEN order_status = 'pending' THEN 'confirmed' ELSE order_status END,
-             updated_at = NOW()
-         WHERE id = $1`,
+    // Bọc xử lý trong transaction để tránh race & hỗ trợ hoàn kho khi thất bại
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Khóa đơn hàng
+      const lockedOrderResult = await client.query(
+        `SELECT id, order_number, payment_status, order_status, total_amount 
+         FROM orders 
+         WHERE id = $1 FOR UPDATE`,
         [order.id]
       );
 
-      logger.info('Payment successful', { orderNumber: verification.orderNumber, transactionId: verification.transactionId });
-    } else {
-      // Payment failed
-      await pool.query(
-        `UPDATE orders 
-         SET payment_status = 'failed', 
-             updated_at = NOW()
-         WHERE id = $1`,
-        [order.id]
-      );
+      if (lockedOrderResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        return res.redirect(`${frontendUrl}/orders?payment=error`);
+      }
 
-      logger.warn('Payment failed', { orderNumber: verification.orderNumber, responseCode: verification.responseCode });
+      const lockedOrder = lockedOrderResult.rows[0];
+
+      // Nếu đã trả tiền rồi thì bỏ qua (idempotent)
+      if (lockedOrder.payment_status === PAYMENT_STATUS.PAID) {
+        await client.query('COMMIT');
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const redirectUrl =
+          verification.responseCode === '00'
+            ? `${frontendUrl}/orders/${lockedOrder.id}?payment=success`
+            : `${frontendUrl}/orders/${lockedOrder.id}?payment=failed`;
+        return res.redirect(redirectUrl);
+      }
+
+      // Đối soát số tiền
+      const callbackAmount = verification.amount ?? 0;
+      const orderAmount = parseFloat(lockedOrder.total_amount);
+      if (verification.responseCode === '00' && Math.abs(callbackAmount - orderAmount) > 0.01) {
+        logger.warn('VNPay amount mismatch', {
+          orderNumber: verification.orderNumber,
+          callbackAmount,
+          orderAmount,
+        });
+        await client.query('ROLLBACK');
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        return res.redirect(`${frontendUrl}/orders/${lockedOrder.id}?payment=error`);
+      }
+
+      if (verification.responseCode === '00') {
+        // Payment successful
+        await client.query(
+          `UPDATE orders 
+           SET payment_status = $1, 
+               order_status = CASE WHEN order_status = $2 THEN $3 ELSE order_status END,
+               updated_at = NOW()
+           WHERE id = $4`,
+          [PAYMENT_STATUS.PAID, ORDER_STATUS.PENDING, ORDER_STATUS.CONFIRMED, lockedOrder.id]
+        );
+
+        await client.query('COMMIT');
+        logger.info('Payment successful', { orderNumber: verification.orderNumber, transactionId: verification.transactionId });
+      } else {
+        // Payment failed: hoàn kho (do đã trừ khi tạo đơn)
+        const orderItems = await client.query(
+          `SELECT product_id, variant_id, quantity FROM order_items WHERE order_id = $1`,
+          [lockedOrder.id]
+        );
+
+        for (const item of orderItems.rows) {
+          let stockQuery: string;
+          let stockParams: any[];
+          if (item.variant_id) {
+            stockQuery = 'SELECT stock_quantity FROM product_variants WHERE id = $1 FOR UPDATE';
+            stockParams = [item.variant_id];
+          } else {
+            stockQuery = 'SELECT stock_quantity FROM products WHERE id = $1 FOR UPDATE';
+            stockParams = [item.product_id];
+          }
+
+          const stockResult = await client.query(stockQuery, stockParams);
+          if (stockResult.rows.length === 0) {
+            // Không tìm thấy sản phẩm/biến thể, bỏ qua để không chặn toàn bộ
+            continue;
+          }
+
+          const currentStock = parseInt(stockResult.rows[0].stock_quantity);
+          const newStock = currentStock + item.quantity;
+
+          if (item.variant_id) {
+            await client.query(
+              'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2',
+              [newStock, item.variant_id]
+            );
+          } else {
+            await client.query('UPDATE products SET stock_quantity = $1 WHERE id = $2', [newStock, item.product_id]);
+          }
+
+          // Ghi lịch sử hoàn kho
+          await client.query(
+            `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
+             VALUES ($1, $2, 'adjustment', $3, $4, $5, $6, NULL)`,
+            [
+              item.product_id,
+              item.variant_id || null,
+              item.quantity,
+              currentStock,
+              newStock,
+              `Hoàn kho do thanh toán VNPay thất bại cho đơn #${lockedOrder.order_number}`,
+            ]
+          );
+        }
+
+        // Cập nhật trạng thái thanh toán
+        await client.query(
+          `UPDATE orders 
+           SET payment_status = $1, 
+               order_status = CASE WHEN order_status = $2 THEN $3 ELSE order_status END,
+               updated_at = NOW()
+           WHERE id = $4`,
+          [PAYMENT_STATUS.FAILED, ORDER_STATUS.PENDING, ORDER_STATUS.CANCELLED || ORDER_STATUS.PENDING, lockedOrder.id]
+        );
+
+        await client.query('COMMIT');
+
+        logger.warn('Payment failed', { orderNumber: verification.orderNumber, responseCode: verification.responseCode });
+      }
+    } catch (err) {
+      await pool.query('ROLLBACK');
+      throw err;
+    } finally {
+      // @ts-ignore
+      client?.release();
     }
 
     // Redirect to frontend
@@ -141,7 +250,7 @@ export const getPaymentStatus = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      'SELECT payment_status, payment_method FROM orders WHERE id = $1 AND user_id = $2',
+      'SELECT payment_status, payment_method FROM orders WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
       [order_id, userId]
     );
 

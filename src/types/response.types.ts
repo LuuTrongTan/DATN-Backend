@@ -5,11 +5,13 @@
 // Auth Module Response Types
 export interface AuthResponse {
   user: {
-    id: number;
+    id: string; // UUID từ database
     email?: string;
     phone?: string;
     full_name?: string;
     role: string;
+    email_verified?: boolean;
+    phone_verified?: boolean;
     created_at?: string;
   };
 }

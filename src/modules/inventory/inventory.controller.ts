@@ -9,6 +9,7 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
   let product_id: number | undefined;
   let variant_id: number | undefined;
   let quantity: number | undefined;
+  const client = await pool.connect();
   try {
     const body = req.body;
     product_id = body.product_id;
@@ -24,21 +25,26 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Số lượng phải lớn hơn 0', 400);
     }
 
+    await client.query('BEGIN');
+
     // Get current stock
     let currentStock: number;
     let stockQuery: string;
     let stockParams: any[];
 
     if (variant_id) {
-      stockQuery = 'SELECT stock_quantity FROM product_variants WHERE id = $1';
+      stockQuery =
+        'SELECT stock_quantity FROM product_variants WHERE id = $1 AND deleted_at IS NULL AND is_active = TRUE FOR UPDATE';
       stockParams = [variant_id];
     } else {
-      stockQuery = 'SELECT stock_quantity FROM products WHERE id = $1';
+      stockQuery =
+        'SELECT stock_quantity FROM products WHERE id = $1 AND deleted_at IS NULL AND is_active = TRUE FOR UPDATE';
       stockParams = [product_id];
     }
 
-    const stockResult = await pool.query(stockQuery, stockParams);
+    const stockResult = await client.query(stockQuery, stockParams);
     if (stockResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       return ResponseHandler.notFound(res, variant_id ? 'Biến thể không tồn tại' : 'Sản phẩm không tồn tại');
     }
 
@@ -47,19 +53,19 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
 
     // Update stock
     if (variant_id) {
-      await pool.query(
-        'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2',
+      await client.query(
+        'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2 AND deleted_at IS NULL AND is_active = TRUE',
         [newStock, variant_id]
       );
     } else {
-      await pool.query(
-        'UPDATE products SET stock_quantity = $1 WHERE id = $2',
+      await client.query(
+        'UPDATE products SET stock_quantity = $1 WHERE id = $2 AND deleted_at IS NULL AND is_active = TRUE',
         [newStock, product_id]
       );
     }
 
     // Create stock history
-    await pool.query(
+    await client.query(
       `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
        VALUES ($1, $2, 'in', $3, $4, $5, $6, $7)`,
       [
@@ -73,15 +79,22 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
       ]
     );
 
-    // Check and update stock alerts
+    await client.query('COMMIT');
+
+    // Check and update stock alerts (ngoài transaction, không quan trọng tới tính toàn vẹn đơn)
     await checkAndUpdateStockAlerts(product_id, variant_id, newStock);
 
-    return ResponseHandler.success(res, {
+    return ResponseHandler.success(
+      res,
+      {
       previous_stock: currentStock,
       quantity_added: quantity,
       new_stock: newStock,
-    }, 'Nhập kho thành công');
+      },
+      'Nhập kho thành công'
+    );
   } catch (error: any) {
+    await client.query('ROLLBACK');
     logger.error('Error in stock in', error instanceof Error ? error : new Error(String(error)), {
       productId: product_id,
       variantId: variant_id,
@@ -90,6 +103,8 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi nhập kho', error);
+  } finally {
+    client.release();
   }
 };
 
@@ -98,6 +113,7 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
   let product_id: number | undefined;
   let variant_id: number | undefined;
   let new_quantity: number | undefined;
+  const client = await pool.connect();
   try {
     const body = req.body;
     product_id = body.product_id;
@@ -113,21 +129,26 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Số lượng mới không hợp lệ', 400);
     }
 
+    await client.query('BEGIN');
+
     // Get current stock
     let currentStock: number;
     let stockQuery: string;
     let stockParams: any[];
 
     if (variant_id) {
-      stockQuery = 'SELECT stock_quantity FROM product_variants WHERE id = $1';
+      stockQuery =
+        'SELECT stock_quantity FROM product_variants WHERE id = $1 AND deleted_at IS NULL AND is_active = TRUE FOR UPDATE';
       stockParams = [variant_id];
     } else {
-      stockQuery = 'SELECT stock_quantity FROM products WHERE id = $1';
+      stockQuery =
+        'SELECT stock_quantity FROM products WHERE id = $1 AND deleted_at IS NULL AND is_active = TRUE FOR UPDATE';
       stockParams = [product_id];
     }
 
-    const stockResult = await pool.query(stockQuery, stockParams);
+    const stockResult = await client.query(stockQuery, stockParams);
     if (stockResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       return ResponseHandler.notFound(res, variant_id ? 'Biến thể không tồn tại' : 'Sản phẩm không tồn tại');
     }
 
@@ -136,19 +157,19 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
 
     // Update stock
     if (variant_id) {
-      await pool.query(
-        'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2',
+      await client.query(
+        'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2 AND deleted_at IS NULL AND is_active = TRUE',
         [new_quantity, variant_id]
       );
     } else {
-      await pool.query(
-        'UPDATE products SET stock_quantity = $1 WHERE id = $2',
+      await client.query(
+        'UPDATE products SET stock_quantity = $1 WHERE id = $2 AND deleted_at IS NULL AND is_active = TRUE',
         [new_quantity, product_id]
       );
     }
 
     // Create stock history
-    await pool.query(
+    await client.query(
       `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
        VALUES ($1, $2, 'adjustment', $3, $4, $5, $6, $7)`,
       [
@@ -162,15 +183,22 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
       ]
     );
 
-    // Check and update stock alerts
+    await client.query('COMMIT');
+
+    // Check and update stock alerts (ngoài transaction)
     await checkAndUpdateStockAlerts(product_id, variant_id, new_quantity);
 
-    return ResponseHandler.success(res, {
+    return ResponseHandler.success(
+      res,
+      {
       previous_stock: currentStock,
       new_stock: new_quantity,
       difference,
-    }, 'Điều chỉnh kho thành công');
+      },
+      'Điều chỉnh kho thành công'
+    );
   } catch (error: any) {
+    await client.query('ROLLBACK');
     logger.error('Error in stock adjustment', error instanceof Error ? error : new Error(String(error)), {
       productId: product_id,
       variantId: variant_id,
@@ -179,6 +207,8 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi điều chỉnh kho', error);
+  } finally {
+    client.release();
   }
 };
 
@@ -192,7 +222,8 @@ export const getStockHistory = async (req: AuthRequest, res: Response) => {
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 50;
 
-    let query = 'SELECT id, product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by, created_at FROM stock_history WHERE 1=1';
+    let query =
+      'SELECT id, product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by, created_at FROM stock_history WHERE 1=1';
     const params: any[] = [];
     let paramCount = 0;
 
@@ -277,8 +308,8 @@ export const getStockAlerts = async (req: AuthRequest, res: Response) => {
              p.name as product_name,
              pv.variant_type, pv.variant_value
       FROM stock_alerts sa
-      LEFT JOIN products p ON sa.product_id = p.id
-      LEFT JOIN product_variants pv ON sa.variant_id = pv.id
+      LEFT JOIN products p ON sa.product_id = p.id AND p.deleted_at IS NULL
+      LEFT JOIN product_variants pv ON sa.variant_id = pv.id AND pv.deleted_at IS NULL
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -361,7 +392,7 @@ async function checkAndUpdateStockAlerts(
   variantId: number | undefined,
   currentStock: number
 ): Promise<void> {
-  const threshold = 10; // Default threshold
+  const defaultThreshold = 10; // Ngưỡng mặc định
 
   // Check if alert exists
   let alertQuery: string;
@@ -378,6 +409,12 @@ async function checkAndUpdateStockAlerts(
   }
 
   const alertResult = await pool.query(alertQuery, alertParams);
+
+  // Nếu đã có alert thì ưu tiên dùng threshold trong DB, nếu không thì dùng mặc định
+  const threshold =
+    alertResult.rows.length > 0 && alertResult.rows[0].threshold != null
+      ? parseInt(alertResult.rows[0].threshold)
+      : defaultThreshold;
 
   if (currentStock <= threshold) {
     // Create or update alert

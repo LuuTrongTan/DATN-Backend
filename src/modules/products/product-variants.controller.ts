@@ -233,7 +233,10 @@ export const deleteVariant = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      'DELETE FROM product_variants WHERE id = $1 RETURNING id',
+      `UPDATE product_variants 
+       SET deleted_at = NOW(), is_active = FALSE, updated_at = NOW()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING id`,
       [id]
     );
 
@@ -242,7 +245,7 @@ export const deleteVariant = async (req: AuthRequest, res: Response) => {
     }
 
     return ResponseHandler.success(res, {
-      message: 'Xóa biến thể thành công',
+      message: 'Xóa (ẩn) biến thể thành công',
     });
   } catch (error: any) {
     logger.error('Error deleting variant', error instanceof Error ? error : new Error(String(error)), {

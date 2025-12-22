@@ -14,5 +14,8 @@ router.post('/', ordersController.createOrder);
 router.get('/', ordersController.getOrders);
 router.get('/:id', ordersController.getOrderById);
 
+// Hủy đơn hàng
+router.post('/:id/cancel', ordersController.cancelOrder);
+
 export default router;
 

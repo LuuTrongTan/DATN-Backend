@@ -9,7 +9,7 @@ import { Request } from 'express';
  */
 export interface AuthRequest extends Request {
   user?: {
-    id: number;
+    id: string; // UUID từ database
     email?: string;
     phone?: string;
     role: string;

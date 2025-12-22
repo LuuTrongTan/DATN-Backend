@@ -9,7 +9,7 @@ import { uploadFile, uploadMultipleFiles } from '../upload/storage.service';
 // UC-07: Tìm kiếm và lọc sản phẩm
 export const searchProducts = async (req: AuthRequest, res: Response) => {
   try {
-    const { q, category_id, min_price, max_price, page = 1, limit = 20 } = req.query;
+    const { q, category_id, category_slug, min_price, max_price, page = 1, limit = 20 } = req.query;
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
     const userId = req.user?.id || null;
@@ -25,7 +25,7 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
       // Video đầu tiên (type = video)
       "(SELECT pm.image_url FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'video' ORDER BY pm.display_order, pm.id LIMIT 1) AS video_url, " +
       // Flag trong wishlist
-      'CASE WHEN $1::int IS NULL THEN false ELSE EXISTS (SELECT 1 FROM wishlist w WHERE w.user_id = $1 AND w.product_id = p.id) END as is_in_wishlist ';
+      'CASE WHEN $1::uuid IS NULL THEN false ELSE EXISTS (SELECT 1 FROM wishlist w WHERE w.user_id = $1::uuid AND w.product_id = p.id) END as is_in_wishlist ';
 
     let query = selectClause + baseQuery;
 
@@ -49,6 +49,17 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
       paramCount++;
       query += ` AND p.category_id = $${paramCount}`;
       params.push(category_id);
+    } else if (category_slug) {
+      // Map category_slug -> id (chỉ lấy category chưa xóa)
+      const slugResult = await pool.query(
+        'SELECT id FROM categories WHERE slug = $1 AND deleted_at IS NULL',
+        [category_slug]
+      );
+      if (slugResult.rows.length > 0) {
+        paramCount++;
+        query += ` AND p.category_id = $${paramCount}`;
+        params.push(slugResult.rows[0].id);
+      }
     }
 
     if (min_price) {
@@ -114,10 +125,10 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
                WHERE pm.product_id = p.id AND pm.type = 'video'
                ORDER BY pm.display_order, pm.id
                LIMIT 1) AS video_url,
-              CASE WHEN $3::int IS NULL THEN false
+              CASE WHEN $3::uuid IS NULL THEN false
                    ELSE EXISTS (
                      SELECT 1 FROM wishlist w
-                     WHERE w.user_id = $3 AND w.product_id = p.id
+                     WHERE w.user_id = $3::uuid AND w.product_id = p.id
                    )
               END as is_in_wishlist
        FROM products p
@@ -151,7 +162,7 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
 export const getCategories = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
-      'SELECT id, name, image_url, description, is_active, created_at, updated_at FROM categories WHERE is_active = TRUE AND deleted_at IS NULL ORDER BY name ASC'
+      'SELECT id, name, slug, image_url, description, is_active, created_at, updated_at FROM categories WHERE is_active = TRUE AND deleted_at IS NULL ORDER BY name ASC'
     );
 
     return ResponseHandler.success(res, result.rows, 'Lấy danh sách danh mục thành công');
@@ -167,7 +178,7 @@ export const getCategoryById = async (req: AuthRequest, res: Response) => {
   try {
 
     const result = await pool.query(
-      'SELECT id, name, image_url, description, is_active, created_at, updated_at FROM categories WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id, name, slug, image_url, description, is_active, created_at, updated_at FROM categories WHERE id = $1 AND deleted_at IS NULL',
       [id]
     );
 
@@ -201,10 +212,10 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
         WHERE pm.product_id = p.id AND pm.type = 'video'
         ORDER BY pm.display_order, pm.id
         LIMIT 1) AS video_url,
-       CASE WHEN $2::int IS NULL THEN false
+       CASE WHEN $2::uuid IS NULL THEN false
             ELSE EXISTS (
               SELECT 1 FROM wishlist w
-              WHERE w.user_id = $2 AND w.product_id = p.id
+              WHERE w.user_id = $2::uuid AND w.product_id = p.id
             )
        END as is_in_wishlist,
        (SELECT json_agg(json_build_object(
@@ -265,26 +276,48 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
     }
     
     // Validate required fields
-    if (!category_id || !name || price === undefined || stock_quantity === undefined) {
-      return ResponseHandler.error(res, 'Thiếu thông tin bắt buộc', 400);
+    const sku = body.sku || `SKU-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    if (!category_id || !name || !sku || price === undefined || stock_quantity === undefined) {
+      return ResponseHandler.error(res, 'Thiếu thông tin bắt buộc (category_id, name, sku, price, stock_quantity)', 400);
     }
     
     // Check if category exists
     const categoryCheck = await pool.query(
-      'SELECT id FROM categories WHERE id = $1',
+      'SELECT id FROM categories WHERE id = $1 AND deleted_at IS NULL',
       [category_id]
     );
 
     if (categoryCheck.rows.length === 0) {
-      return ResponseHandler.error(res, 'Danh mục không tồn tại', 400);
+      return ResponseHandler.notFound(res, 'Danh mục không tồn tại');
     }
 
-    // Insert product into database
+    // Check if SKU already exists
+    const skuCheck = await pool.query(
+      'SELECT id FROM products WHERE sku = $1 AND deleted_at IS NULL',
+      [sku]
+    );
+
+    if (skuCheck.rows.length > 0) {
+      return ResponseHandler.conflict(res, 'SKU đã tồn tại');
+    }
+
+    // Insert product into database with all required fields
     const result = await pool.query(
-      `INSERT INTO products (category_id, name, description, price, stock_quantity)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, category_id, name, description, price, stock_quantity, is_active, created_at, updated_at`,
-      [category_id, name, description, price, stock_quantity]
+      `INSERT INTO products (category_id, sku, name, description, price, stock_quantity, brand, view_count, sold_count, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, category_id, sku, name, description, price, stock_quantity, brand, view_count, sold_count, is_active, created_at, updated_at`,
+      [
+        category_id,
+        sku,
+        name,
+        description,
+        price,
+        stock_quantity,
+        body.brand || null,
+        0, // view_count
+        0, // sold_count
+        body.is_active !== false, // default true
+      ]
     );
 
     const product = result.rows[0];
@@ -315,19 +348,40 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
   try {
     const updates = req.body;
 
-    // Check if product exists
-    const productCheck = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
+
+    // Check if product exists and not deleted
+    const productCheck = await pool.query(
+      'SELECT id, sku FROM products WHERE id = $1 AND deleted_at IS NULL',
+      [id]
+    );
 
     if (productCheck.rows.length === 0) {
       return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
     }
 
-    // Validate updates
-    if (updates.name === '' || updates.stock_quantity === null) {
-      return ResponseHandler.error(res, 'Tên sản phẩm và số lượng không được để trống', 400);
+    // If SKU is being updated, check for duplicates
+    if (updates.sku && updates.sku !== productCheck.rows[0].sku) {
+      const skuCheck = await pool.query(
+        'SELECT id FROM products WHERE sku = $1 AND id != $2 AND deleted_at IS NULL',
+        [updates.sku, id]
+      );
+      if (skuCheck.rows.length > 0) {
+        return ResponseHandler.conflict(res, 'SKU đã tồn tại');
+      }
     }
 
-    const allowedFields = ['name', 'description', 'price', 'stock_quantity', 'category_id'];
+    // If category_id is being updated, ensure category exists and not deleted
+    if (updates.category_id !== undefined && updates.category_id !== null) {
+      const categoryCheck = await pool.query(
+        'SELECT id FROM categories WHERE id = $1 AND deleted_at IS NULL',
+        [updates.category_id]
+      );
+      if (categoryCheck.rows.length === 0) {
+        return ResponseHandler.notFound(res, 'Danh mục không tồn tại');
+      }
+    }
+
+    const allowedFields = ['name', 'description', 'price', 'stock_quantity', 'category_id', 'sku', 'brand', 'is_active'];
     const updateFields: string[] = [];
     const values: any[] = [];
     let paramCount = 0;
@@ -350,8 +404,8 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
     values.push(id);
 
     const result = await pool.query(
-      `UPDATE products SET ${updateFields.join(', ')} WHERE id = $${paramCount}
-       RETURNING id, category_id, name, description, price, stock_quantity, is_active, created_at, updated_at`,
+      `UPDATE products SET ${updateFields.join(', ')} WHERE id = $${paramCount} AND deleted_at IS NULL
+       RETURNING id, category_id, sku, name, description, price, stock_quantity, brand, view_count, sold_count, is_active, created_at, updated_at`,
       values
     );
 
@@ -381,6 +435,14 @@ export const deleteProduct = async (req: AuthRequest, res: Response) => {
     if (result.rows.length === 0) {
       return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
     }
+
+    // Soft delete toàn bộ biến thể liên quan
+    await pool.query(
+      `UPDATE product_variants 
+       SET deleted_at = NOW(), is_active = FALSE, updated_at = NOW()
+       WHERE product_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
 
     return ResponseHandler.success(res, null, 'Xóa sản phẩm thành công');
   } catch (error: any) {

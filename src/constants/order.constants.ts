@@ -1,11 +1,11 @@
 /**
- * Order Status Constants
+ * Order Status Constants - Based on database_schema.dbml
  */
 export const ORDER_STATUS = {
   PENDING: 'pending',
   CONFIRMED: 'confirmed',
   PROCESSING: 'processing',
-  SHIPPED: 'shipped',
+  SHIPPING: 'shipping', // Note: database uses 'shipping' not 'shipped'
   DELIVERED: 'delivered',
   CANCELLED: 'cancelled',
 } as const;
@@ -42,7 +42,9 @@ export const ORDER_NUMBER_PREFIX = 'ORD';
 /**
  * Generate Order Number
  */
-export const generateOrderNumber = (userId: number): string => {
-  return `${ORDER_NUMBER_PREFIX}-${Date.now()}-${userId}`;
+export const generateOrderNumber = (userId: string): string => {
+  // Use first 8 characters of UUID for order number (shorter and readable)
+  const userIdShort = userId.replace(/-/g, '').substring(0, 8);
+  return `${ORDER_NUMBER_PREFIX}-${Date.now()}-${userIdShort}`;
 };
 

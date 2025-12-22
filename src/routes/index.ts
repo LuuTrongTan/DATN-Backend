@@ -12,6 +12,7 @@ import inventoryRoutes from '../modules/inventory/inventory.routes';
 import paymentRoutes from '../modules/payment/payment.routes';
 import shippingRoutes from '../modules/shipping/shipping.routes';
 import notificationRoutes from '../modules/notifications/notifications.routes';
+import provincesRoutes from '../modules/provinces/provinces.routes';
 
 const router = express.Router();
 
@@ -29,6 +30,7 @@ router.use('/inventory', inventoryRoutes);
 router.use('/payment', paymentRoutes);
 router.use('/shipping', shippingRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/provinces', provincesRoutes);
 
 export default router;
 

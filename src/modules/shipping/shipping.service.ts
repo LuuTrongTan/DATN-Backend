@@ -1,4 +1,5 @@
 import { logger } from '../../utils/logging';
+import { ShippingStatus } from '../../connections/db/models/shipping.model';
 
 // Simplified shipping fee calculation
 // In production, this should integrate with shipping providers like GHTK, Vietnam Post, etc.
@@ -100,7 +101,7 @@ export const createShippingRecord = async (
 
   const result = await pool.query(
     `INSERT INTO shipping (order_id, shipping_provider, tracking_number, shipping_fee, estimated_delivery_date, status)
-     VALUES ($1, $2, $3, $4, $5, 'pending')
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
     [
       request.order_id,
@@ -108,6 +109,7 @@ export const createShippingRecord = async (
       request.tracking_number || null,
       request.shipping_fee,
       estimatedDate,
+      'pending' as ShippingStatus, // Default status
     ]
   );
 

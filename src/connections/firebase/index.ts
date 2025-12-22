@@ -30,11 +30,6 @@ export const initializeFirebase = (): void => {
     // Parse private key (replace \\n with actual newlines)
     const privateKey = smsConfig.firebasePrivateKey.replace(/\\n/g, '\n');
 
-    logger.info('[Firebase] Initializing Firebase Admin with project ID', {
-      projectId: smsConfig.firebaseProjectId,
-      clientEmail: smsConfig.firebaseClientEmail,
-    });
-
     firebaseApp = admin.initializeApp({
       credential: admin.credential.cert({
         projectId: smsConfig.firebaseProjectId,

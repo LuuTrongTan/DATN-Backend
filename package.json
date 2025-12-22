@@ -4,7 +4,8 @@
   "description": "Backend API cho hệ thống cửa hàng trực tuyến",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "nodemon",
+    "dev:tsx": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "migrate:up": "tsx src/connections/db/migrate.ts",
@@ -49,6 +50,7 @@
     "@types/nodemailer": "^6.4.14",
     "@types/pg": "^8.10.9",
     "@types/uuid": "^10.0.0",
+    "nodemon": "^3.0.2",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }

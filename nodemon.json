@@ -1,0 +1,25 @@
+{
+  "watch": ["src"],
+  "ext": "ts,json",
+  "ignore": [
+    "src/**/*.spec.ts",
+    "src/**/*.test.ts",
+    "node_modules",
+    "dist",
+    "logs",
+    "logs_local",
+    "uploads",
+    "*.log",
+    "*.map"
+  ],
+  "exec": "tsx src/index.ts",
+  "env": {
+    "NODE_ENV": "development"
+  },
+  "delay": "1000",
+  "verbose": true,
+  "legacyWatch": true,
+  "signal": "SIGTERM",
+  "restartable": "rs"
+}
+

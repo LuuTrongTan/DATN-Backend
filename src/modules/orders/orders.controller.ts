@@ -7,6 +7,7 @@ import { createShippingRecord } from '../shipping/shipping.service';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 import { appConfig } from '../../connections/config/app.config';
+import { ORDER_STATUS, PAYMENT_STATUS, generateOrderNumber } from '../../constants';
 
 // UC-12: Đặt hàng
 export const createOrder = async (req: AuthRequest, res: Response) => {
@@ -14,13 +15,13 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     const validated = orderSchema.parse(req.body);
     const userId = req.user!.id;
 
-    // Get cart items
+    // Get cart items (only active products)
     const cartItems = await pool.query(
       `SELECT ci.*, p.price, p.stock_quantity as product_stock,
        pv.price_adjustment, pv.stock_quantity as variant_stock
        FROM cart_items ci
-       JOIN products p ON ci.product_id = p.id
-       LEFT JOIN product_variants pv ON ci.variant_id = pv.id
+       JOIN products p ON ci.product_id = p.id AND p.deleted_at IS NULL AND p.is_active = TRUE
+       LEFT JOIN product_variants pv ON ci.variant_id = pv.id AND pv.deleted_at IS NULL AND pv.is_active = TRUE
        WHERE ci.user_id = $1`,
       [userId]
     );
@@ -29,13 +30,69 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Giỏ hàng trống', 400);
     }
 
-    // Check stock and calculate total
-    let totalAmount = 0;
+    // Get user info for order
+    const userResult = await pool.query(
+      'SELECT full_name, phone, email FROM users WHERE id = $1',
+      [userId]
+    );
+    const user = userResult.rows[0];
+
+    // Check stock and calculate totals
+    let subtotal = 0;
     const orderItems: any[] = [];
 
     for (const item of cartItems.rows) {
+      // Kiểm tra sản phẩm/biến thể còn tồn tại và còn hoạt động
+      if (item.variant_id) {
+        // Có variant_id nhưng join không ra bản ghi hợp lệ
+        if (item.variant_stock === null || item.variant_stock === undefined) {
+          return ResponseHandler.error(
+            res,
+            `Biến thể của sản phẩm ${item.product_id} không tồn tại hoặc đã vô hiệu hóa`,
+            400,
+            {
+              code: 'VARIANT_NOT_FOUND_OR_INACTIVE',
+              details: {
+                productId: item.product_id,
+                variantId: item.variant_id,
+              },
+            }
+          );
+        }
+      } else {
+        // Không có variant_id, nhưng product_stock không có => sản phẩm không hợp lệ
+        if (item.product_stock === null || item.product_stock === undefined) {
+          return ResponseHandler.error(
+            res,
+            `Sản phẩm ${item.product_id} không tồn tại hoặc đã vô hiệu hóa`,
+            400,
+            {
+              code: 'PRODUCT_NOT_FOUND_OR_INACTIVE',
+              details: {
+                productId: item.product_id,
+              },
+            }
+          );
+        }
+      }
+
       const availableStock = item.variant_id ? item.variant_stock : item.product_stock;
-      
+
+      if (availableStock === null || availableStock === undefined) {
+        return ResponseHandler.error(
+          res,
+          `Không thể xác định tồn kho cho sản phẩm ${item.product_id}`,
+          400,
+          {
+            code: 'STOCK_NOT_AVAILABLE',
+            details: {
+              productId: item.product_id,
+              variantId: item.variant_id,
+            },
+          }
+        );
+      }
+
       if (item.quantity > availableStock) {
         return ResponseHandler.error(res, `Sản phẩm ${item.product_id} không đủ số lượng`, 400, {
           code: 'INSUFFICIENT_STOCK',
@@ -45,7 +102,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
 
       const itemPrice = item.price + (item.price_adjustment || 0);
       const itemTotal = itemPrice * item.quantity;
-      totalAmount += itemTotal;
+      subtotal += itemTotal;
 
       orderItems.push({
         product_id: item.product_id,
@@ -55,32 +112,46 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-
-    // Calculate shipping fee (simplified - will be replaced by shipping service)
+    // Calculate fees and totals
     const defaultShippingFee = parseInt(process.env.DEFAULT_SHIPPING_FEE || '30000');
     const shippingFee = validated.shipping_fee || defaultShippingFee;
+    const discountAmount = validated.discount_amount || 0;
+    const taxAmount = validated.tax_amount || 0;
+    const totalAmount = subtotal + shippingFee - discountAmount + taxAmount;
 
-    // Create order with transaction
-    const orderNumber = `ORD-${Date.now()}-${userId}`;
-    const finalAmount = totalAmount + shippingFee;
+    // Generate order number using constant function
+    const orderNumber = generateOrderNumber(userId);
     
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // Create order
+      // Create order with all required fields from schema
       const orderResult = await client.query(
-        `INSERT INTO orders (user_id, order_number, total_amount, shipping_address, 
-          payment_method, shipping_fee, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, user_id, order_number, total_amount, order_status, payment_status, shipping_address, payment_method, shipping_fee, notes, created_at, updated_at`,
+        `INSERT INTO orders (
+          user_id, order_number, customer_name, customer_phone, customer_email,
+          subtotal, discount_amount, tax_amount, shipping_fee, total_amount,
+          shipping_address, payment_method, payment_status, order_status, notes
+        )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         RETURNING id, user_id, order_number, customer_name, customer_phone, customer_email,
+          subtotal, discount_amount, tax_amount, shipping_fee, total_amount,
+          order_status, payment_status, shipping_address, payment_method, notes, created_at, updated_at`,
         [
           userId,
           orderNumber,
-          finalAmount,
+          user.full_name || validated.customer_name || null,
+          user.phone || validated.customer_phone || null,
+          user.email || validated.customer_email || null,
+          subtotal,
+          discountAmount,
+          taxAmount,
+          shippingFee,
+          totalAmount,
           validated.shipping_address,
           validated.payment_method,
-          shippingFee,
+          PAYMENT_STATUS.PENDING,
+          ORDER_STATUS.PENDING,
           validated.notes || null,
         ]
       );
@@ -95,19 +166,25 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
           [order.id, item.product_id, item.variant_id, item.quantity, item.price]
         );
 
-        // Get current stock before update
+        // Get current stock before update (check soft delete)
         let currentStock: number;
         if (item.variant_id) {
           const stockResult = await client.query(
-            'SELECT stock_quantity FROM product_variants WHERE id = $1',
+            'SELECT stock_quantity FROM product_variants WHERE id = $1 AND deleted_at IS NULL',
             [item.variant_id]
           );
+          if (stockResult.rows.length === 0) {
+            throw new Error(`Variant ${item.variant_id} không tồn tại hoặc đã bị xóa`);
+          }
           currentStock = parseInt(stockResult.rows[0].stock_quantity);
         } else {
           const stockResult = await client.query(
-            'SELECT stock_quantity FROM products WHERE id = $1',
+            'SELECT stock_quantity FROM products WHERE id = $1 AND deleted_at IS NULL',
             [item.product_id]
           );
+          if (stockResult.rows.length === 0) {
+            throw new Error(`Product ${item.product_id} không tồn tại hoặc đã bị xóa`);
+          }
           currentStock = parseInt(stockResult.rows[0].stock_quantity);
         }
 
@@ -166,17 +243,12 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     // For online payment, return payment URL in response
     // For COD, order is already created with pending payment status
 
-      // Get user info for email
-      const userResult = await pool.query(
-        'SELECT email, full_name FROM users WHERE id = $1',
-        [userId]
-      );
-      const user = userResult.rows[0];
+      // User info already fetched above
 
       // Get product names for email
       const productIds = orderItems.map(item => item.product_id);
       const productsResult = await pool.query(
-        `SELECT id, name FROM products WHERE id = ANY($1::int[])`,
+        `SELECT id, name FROM products WHERE id = ANY($1::int[]) AND deleted_at IS NULL`,
         [productIds]
       );
       const productsMap = new Map(productsResult.rows.map(p => [p.id, p.name]));
@@ -223,7 +295,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
           const paymentUrl = createPaymentUrl(
             order.id,
             order.order_number,
-          parseFloat(finalAmount.toString()),
+            parseFloat(totalAmount.toString()),
           `Thanh toan don hang ${order.order_number}`,
           'other',
           'vn',
@@ -277,7 +349,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
         'price', oi.price
       )) FROM order_items oi WHERE oi.order_id = o.id) as items
       FROM orders o
-      WHERE o.user_id = $1
+      WHERE o.user_id = $1 AND o.deleted_at IS NULL
     `;
     const params: any[] = [userId];
 
@@ -326,7 +398,7 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
        )) FROM order_status_history osh 
        WHERE osh.order_id = o.id ORDER BY osh.created_at DESC) as status_history
        FROM orders o
-       WHERE o.id = $1 AND o.user_id = $2`,
+      WHERE o.id = $1 AND o.user_id = $2 AND o.deleted_at IS NULL`,
       [id, userId]
     );
 
@@ -342,6 +414,125 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin đơn hàng', error);
+  }
+};
+
+// Hủy đơn hàng (hoàn kho nếu đã trừ tồn, chỉ cho phép khi chưa giao/đã thanh toán)
+export const cancelOrder = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user?.id;
+  const client = await pool.connect();
+
+  try {
+    if (!userId) {
+      return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
+    }
+
+    await client.query('BEGIN');
+
+    // Khóa đơn hàng để tránh race
+    const orderResult = await client.query(
+      `SELECT id, user_id, order_number, order_status, payment_status 
+       FROM orders 
+       WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+       FOR UPDATE`,
+      [id, userId]
+    );
+
+    if (orderResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
+    }
+
+    const order = orderResult.rows[0];
+
+    // Chỉ cho hủy khi đơn chưa giao/hậu cần
+    const notCancellableStatuses = [ORDER_STATUS.SHIPPING, ORDER_STATUS.DELIVERED, ORDER_STATUS.CANCELLED];
+    if (notCancellableStatuses.includes(order.order_status)) {
+      await client.query('ROLLBACK');
+      return ResponseHandler.error(res, 'Đơn hàng không thể hủy ở trạng thái hiện tại', 400);
+    }
+
+    // Nếu đã thanh toán online (PAID), cần quy trình hoàn tiền riêng
+    if (order.payment_status === PAYMENT_STATUS.PAID) {
+      await client.query('ROLLBACK');
+      return ResponseHandler.error(res, 'Đơn đã thanh toán, cần xử lý hoàn tiền thủ công', 400);
+    }
+
+    // Hoàn kho (vì đã trừ khi tạo đơn)
+    const orderItems = await client.query(
+      `SELECT product_id, variant_id, quantity FROM order_items WHERE order_id = $1`,
+      [order.id]
+    );
+
+    for (const item of orderItems.rows) {
+      let stockQuery: string;
+      let stockParams: any[];
+      if (item.variant_id) {
+        stockQuery = 'SELECT stock_quantity FROM product_variants WHERE id = $1 FOR UPDATE';
+        stockParams = [item.variant_id];
+      } else {
+        stockQuery = 'SELECT stock_quantity FROM products WHERE id = $1 FOR UPDATE';
+        stockParams = [item.product_id];
+      }
+
+      const stockResult = await client.query(stockQuery, stockParams);
+      if (stockResult.rows.length === 0) {
+        // Nếu không tìm thấy, bỏ qua để không chặn toàn bộ hủy đơn
+        continue;
+      }
+
+      const currentStock = parseInt(stockResult.rows[0].stock_quantity);
+      const newStock = currentStock + item.quantity;
+
+      if (item.variant_id) {
+        await client.query('UPDATE product_variants SET stock_quantity = $1 WHERE id = $2', [
+          newStock,
+          item.variant_id,
+        ]);
+      } else {
+        await client.query('UPDATE products SET stock_quantity = $1 WHERE id = $2', [newStock, item.product_id]);
+      }
+
+      // Ghi lịch sử hoàn kho do hủy đơn
+      await client.query(
+        `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
+         VALUES ($1, $2, 'adjustment', $3, $4, $5, $6, $7)`,
+        [
+          item.product_id,
+          item.variant_id || null,
+          item.quantity,
+          currentStock,
+          newStock,
+          `Hoàn kho do hủy đơn #${order.order_number}`,
+          userId,
+        ]
+      );
+    }
+
+    // Cập nhật trạng thái đơn
+    await client.query(
+      `UPDATE orders 
+       SET order_status = $1, 
+           payment_status = CASE WHEN payment_status = $2 THEN $3 ELSE payment_status END,
+           updated_at = NOW()
+       WHERE id = $4`,
+      [ORDER_STATUS.CANCELLED, PAYMENT_STATUS.PENDING, PAYMENT_STATUS.FAILED, order.id]
+    );
+
+    await client.query('COMMIT');
+
+    return ResponseHandler.success(res, { order_id: order.id }, 'Hủy đơn hàng thành công');
+  } catch (error: any) {
+    await client.query('ROLLBACK');
+    logger.error('Error cancelling order', error instanceof Error ? error : new Error(String(error)), {
+      orderId: id,
+      userId,
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi hủy đơn hàng', error);
+  } finally {
+    client.release();
   }
 };
 

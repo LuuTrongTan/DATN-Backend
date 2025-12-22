@@ -95,6 +95,13 @@ export class ResponseHandler {
     message: string = 'Yêu cầu không hợp lệ',
     details?: any
   ): Response {
+    logger.warn('[Bad Request]', {
+      message,
+      details,
+      path: res.req?.path,
+      method: res.req?.method,
+      ip: res.req?.ip,
+    });
     return this.error(
       res,
       message,
@@ -114,6 +121,12 @@ export class ResponseHandler {
     errors: any[],
     message: string = 'Dữ liệu không hợp lệ'
   ): Response {
+    logger.warn('[Validation Error]', {
+      message,
+      errors,
+      path: res.req?.path,
+      method: res.req?.method,
+    });
     return this.error(
       res,
       message,
@@ -132,6 +145,12 @@ export class ResponseHandler {
     res: Response,
     message: string = 'Không có quyền truy cập'
   ): Response {
+    logger.warn('[Unauthorized]', {
+      message,
+      path: res.req?.path,
+      method: res.req?.method,
+      ip: res.req?.ip,
+    });
     return this.error(res, message, 401, {
       code: 'UNAUTHORIZED',
     });
@@ -144,6 +163,12 @@ export class ResponseHandler {
     res: Response,
     message: string = 'Bị cấm truy cập'
   ): Response {
+    logger.warn('[Forbidden]', {
+      message,
+      path: res.req?.path,
+      method: res.req?.method,
+      ip: res.req?.ip,
+    });
     return this.error(res, message, 403, {
       code: 'FORBIDDEN',
     });
@@ -156,6 +181,12 @@ export class ResponseHandler {
     res: Response,
     message: string = 'Không tìm thấy'
   ): Response {
+    logger.warn('[Not Found]', {
+      message,
+      path: res.req?.path,
+      method: res.req?.method,
+      ip: res.req?.ip,
+    });
     return this.error(res, message, 404, {
       code: 'NOT_FOUND',
     });
@@ -169,6 +200,13 @@ export class ResponseHandler {
     message: string = 'Dữ liệu đã tồn tại',
     details?: any
   ): Response {
+    logger.warn('[Conflict]', {
+      message,
+      details,
+      path: res.req?.path,
+      method: res.req?.method,
+      ip: res.req?.ip,
+    });
     return this.error(res, message, 409, {
       code: 'CONFLICT',
       details,
@@ -183,6 +221,13 @@ export class ResponseHandler {
     message: string = 'Quá nhiều yêu cầu',
     retryAfter?: number
   ): Response {
+    logger.warn('[Too Many Requests]', {
+      message,
+      retryAfter,
+      path: res.req?.path,
+      method: res.req?.method,
+      ip: res.req?.ip,
+    });
     return this.error(
       res,
       message,
