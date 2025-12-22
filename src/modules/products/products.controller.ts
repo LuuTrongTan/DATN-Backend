@@ -162,7 +162,10 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
 export const getCategories = async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
-      'SELECT id, name, slug, image_url, description, is_active, created_at, updated_at FROM categories WHERE is_active = TRUE AND deleted_at IS NULL ORDER BY name ASC'
+      `SELECT id, name, slug, image_url, description, is_active, created_at, updated_at, display_order
+       FROM categories
+       WHERE is_active = TRUE AND deleted_at IS NULL
+       ORDER BY display_order NULLS LAST, name ASC`
     );
 
     return ResponseHandler.success(res, result.rows, 'Lấy danh sách danh mục thành công');
