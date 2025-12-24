@@ -7,6 +7,7 @@ export const migration: Migration = {
       CREATE TABLE IF NOT EXISTS product_media (
         id SERIAL PRIMARY KEY,
         product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+        variant_id INTEGER REFERENCES product_variants(id) ON DELETE CASCADE,
         type VARCHAR(20) NOT NULL DEFAULT 'image',
         image_url VARCHAR(500) NOT NULL,
         alt_text VARCHAR(255),
@@ -21,11 +22,16 @@ export const migration: Migration = {
     `);
 
     await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_product_media_variant ON product_media(variant_id)
+    `);
+
+    await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_product_media_primary ON product_media(product_id, is_primary)
     `);
   },
 
   async down(pool: Pool) {
+    await pool.query('DROP INDEX IF EXISTS idx_product_media_variant');
     await pool.query('DROP INDEX IF EXISTS idx_product_media_primary');
     await pool.query('DROP INDEX IF EXISTS idx_product_media_product');
     await pool.query('DROP TABLE IF EXISTS product_media CASCADE');

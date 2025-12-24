@@ -1,44 +1,73 @@
-// Diagram of XgameProject Database
-// Use https://dbdiagram.io to visualize this
+// Database schema for XgameProject (PostgreSQL)
+// Visualize with https://dbdiagram.io
+
+Enum user_status {
+  active
+  banned
+  deleted
+}
+
+Enum verification_code_type {
+  phone
+  verify_email
+  change_phone
+  password_reset
+  "2fa"
+}
+
+Enum notification_type {
+  order_placed
+  order_shipped
+  order_delivered
+  order_cancelled
+  payment_success
+  payment_failed
+  review_request
+  promotion
+  system
+  support_ticket
+}
 
 Table users {
   id uuid [pk, default: `uuid_generate_v4()`]
-  phone varchar(15) [unique, not null, note: 'REQUIRED - Đăng ký chỉ qua phone']
-  email varchar(255) [unique, note: 'OPTIONAL - User thêm sau khi đã có account']
+  phone varchar(15) [unique, not null]
+  email varchar(255) [unique]
   password_hash varchar(255) [not null]
   full_name varchar(255)
   avatar_url varchar(500)
-  phone_verified boolean [default: false, note: 'TRUE sau khi verify OTP đăng ký']
-  email_verified boolean [default: false, note: 'TRUE sau khi user thêm email và verify']
-  status varchar [default: 'active', note: 'enum: active, banned, deleted']
+  phone_verified boolean [default: false]
+  email_verified boolean [default: false]
+  status user_status [default: 'active']
   role varchar(20) [default: 'customer']
   date_of_birth date
   gender varchar(10)
   last_login_at timestamp
-  created_at timestamp
-  updated_at timestamp
-  
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+
   indexes {
     phone [name: 'idx_users_phone']
     email [name: 'idx_users_email']
     role [name: 'idx_users_role']
     status [name: 'idx_users_status']
     (role, status) [name: 'idx_users_role_status']
+    status [name: 'idx_users_active_status', note: "partial WHERE status = 'active'"]
     last_login_at [name: 'idx_users_last_login']
   }
 }
 
 Table verification_codes {
   id integer [pk]
-  user_id uuid
-  contact_value varchar(255) [not null, note: 'Gộp phone và email: phone khi type=phone/change_phone, email khi type=verify_email/password_reset']
+  user_id uuid [ref: > users.id]
+  contact_value varchar(255) [not null, note: 'phone/email tùy type']
   code varchar(10) [not null]
-  type varchar [not null, note: 'enum: phone (đăng ký), verify_email (xác thực email), change_phone (đổi số điện thoại), password_reset, 2fa']
+  type verification_code_type [not null]
   expires_at timestamp [not null]
   is_used boolean [default: false]
   attempts integer [default: 0]
-  created_at timestamp
-  
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  note: "CHK: type='phone' => user_id IS NULL; type!='phone' => user_id IS NOT NULL"
+
   indexes {
     user_id [name: 'idx_verification_codes_user']
     contact_value [name: 'idx_verification_codes_contact']
@@ -50,28 +79,28 @@ Table verification_codes {
 
 Table categories {
   id integer [pk]
-  parent_id integer [ref: > categories.id, note: 'NULL = danh mục gốc, có giá trị = danh mục con']
+  parent_id integer [ref: > categories.id, note: 'NULL = danh mục gốc']
   name varchar(255) [not null]
-  slug varchar(255) [unique, not null, note: 'SEO-friendly URL, ví dụ: ao-thun, quan-jeans']
+  slug varchar(255) [unique, not null]
   image_url varchar(500)
   description text
-  display_order integer [default: 0, note: 'Thứ tự hiển thị (số nhỏ hiển thị trước)']
+  display_order integer [default: 0]
   is_active boolean [default: true]
-  created_at timestamp
-  updated_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
   deleted_at timestamp
-  
+
   indexes {
     parent_id [name: 'idx_categories_parent']
     slug [name: 'idx_categories_slug']
     (is_active, deleted_at) [name: 'idx_categories_active']
-    (display_order, is_active) [name: 'idx_categories_display_order']
+    (display_order, is_active) [name: 'idx_categories_display_order', note: 'partial WHERE deleted_at IS NULL']
   }
 }
 
 Table products {
   id integer [pk]
-  category_id integer
+  category_id integer [ref: > categories.id]
   sku varchar(100) [unique]
   name varchar(255) [not null]
   description text
@@ -81,78 +110,105 @@ Table products {
   view_count integer [default: 0]
   sold_count integer [default: 0]
   is_active boolean [default: true]
-  search_vector text [note: 'Full-text search vector - tự động tạo từ name + description bằng trigger hoặc application code']
-  created_at timestamp
-  updated_at timestamp
+  search_vector tsvector [note: 'auto-updated trigger']
+  embedding vector(1536) [note: 'requires pgvector extension']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
   deleted_at timestamp
+
+  indexes {
+    category_id [name: 'idx_products_category']
+    name [name: 'idx_products_name']
+    price [name: 'idx_products_price']
+    created_at [name: 'idx_products_created_at']
+    is_active [name: 'idx_products_active', note: 'partial WHERE is_active = true']
+    sku [name: 'idx_products_sku', note: 'partial WHERE sku IS NOT NULL']
+    search_vector [name: 'idx_products_search_vector', type: gin]
+    (category_id, is_active) [name: 'idx_products_category_active', note: 'partial WHERE is_active = true']
+    (price, category_id) [name: 'idx_products_price_range', note: 'partial WHERE is_active = true']
+    embedding [name: 'idx_products_embedding', note: 'HNSW if pgvector']
+  }
 }
 
 Table product_variants {
   id integer [pk]
   product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
-  sku varchar(100) [unique, note: 'SKU riêng cho từng biến thể, ví dụ: AO-THUN-001-M-DO']
-  variant_type varchar(50) [not null, note: 'Loại biến thể: Size, Color, Material, Style...']
-  variant_value varchar(100) [not null, note: 'Giá trị: M, L, XL hoặc Đỏ, Xanh...']
-  price_adjustment integer [default: 0, note: 'Điều chỉnh giá so với giá gốc (VND), +50000 = tăng 50k, -30000 = giảm 30k']
-  stock_quantity integer [default: 0, note: 'Số lượng tồn kho của biến thể này']
-  image_url varchar(500) [note: 'Ảnh riêng cho biến thể (ví dụ: màu khác nhau có ảnh khác nhau)']
-  is_active boolean [default: true, note: 'Ẩn/hiện biến thể']
-  created_at timestamp
-  updated_at timestamp
+  sku varchar(100) [unique, note: 'SKU riêng cho biến thể']
+  variant_type varchar(50) [not null]
+  variant_value varchar(100) [not null]
+  price_adjustment integer [default: 0, note: 'VND delta vs product price']
+  stock_quantity integer [default: 0]
+  image_url varchar(500)
+  is_active boolean [default: true]
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
   deleted_at timestamp
-  
+
   indexes {
     product_id [name: 'idx_product_variants_product']
-    sku [name: 'idx_product_variants_sku']
+    sku [name: 'idx_product_variants_sku', note: 'partial WHERE sku IS NOT NULL']
     variant_type [name: 'idx_product_variants_type']
     (is_active, deleted_at) [name: 'idx_product_variants_active']
-    (product_id, is_active) [name: 'idx_product_variants_product_active']
+    (product_id, is_active) [name: 'idx_product_variants_product_active', note: 'partial WHERE deleted_at IS NULL']
+    (product_id, variant_type, variant_value) [name: 'unique_product_variant', unique]
   }
-  
-  Note: 'Constraint UNIQUE (product_id, variant_type, variant_value) - đảm bảo không trùng biến thể'
 }
 
 Table product_media {
   id integer [pk]
-  product_id integer
-  type varchar(20) [default: 'image', note: 'image | video']
+  product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
+  variant_id integer [ref: > product_variants.id, note: 'ON DELETE CASCADE']
+  type varchar(20) [not null, default: 'image']
   image_url varchar(500) [not null]
   alt_text varchar(255)
   display_order integer [default: 0]
   is_primary boolean [default: false]
-  created_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    product_id [name: 'idx_product_media_product']
+    variant_id [name: 'idx_product_media_variant']
+    (product_id, is_primary) [name: 'idx_product_media_primary']
+  }
 }
 
 Table product_tags {
   id integer [pk]
   name varchar(100) [unique, not null]
   slug varchar(100) [unique, not null]
-  created_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
 }
 
 Table product_tag_relations {
-  product_id integer [pk]
-  tag_id integer [pk]
-  created_at timestamp
+  product_id integer [ref: > products.id]
+  tag_id integer [ref: > product_tags.id]
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  indexes {
+    (product_id, tag_id) [pk]
+    product_id [name: 'idx_product_tag_relations_product']
+    tag_id [name: 'idx_product_tag_relations_tag']
+  }
 }
 
 Table cart_items {
   id integer [pk]
-  user_id uuid
-  product_id integer
-  variant_id integer
+  user_id uuid [ref: > users.id, note: 'ON DELETE CASCADE']
+  product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
+  variant_id integer [ref: > product_variants.id]
   quantity integer [not null, default: 1]
-  created_at timestamp
-  updated_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    user_id [name: 'idx_cart_items_user']
+    (user_id, product_id, variant_id) [unique, name: 'cart_items_unique']
+  }
 }
 
 Table orders {
   id integer [pk]
-  user_id uuid
+  user_id uuid [ref: > users.id, note: 'ON DELETE SET NULL']
   order_number varchar(50) [unique, not null]
-  customer_name varchar(255)
-  customer_phone varchar(10)
-  customer_email varchar(255)
   subtotal decimal(10, 2) [not null]
   discount_amount decimal(10, 2) [default: 0]
   tax_amount decimal(10, 2) [default: 0]
@@ -163,119 +219,154 @@ Table orders {
   payment_status varchar(20) [default: 'pending']
   order_status varchar(20) [default: 'pending']
   cancelled_at timestamp
-  cancelled_by uuid
+  cancelled_by uuid [ref: > users.id, note: 'ON DELETE SET NULL']
   cancellation_reason text
   delivery_date date
   notes text
-  created_at timestamp
-  updated_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
   deleted_at timestamp
+
+  indexes {
+    user_id [name: 'idx_orders_user']
+    order_status [name: 'idx_orders_status']
+    payment_status [name: 'idx_orders_payment_status']
+    created_at [name: 'idx_orders_created_at']
+    order_number [name: 'idx_orders_order_number']
+  }
 }
 
 Table order_items {
   id integer [pk]
-  order_id integer
-  product_id integer
-  variant_id integer
+  order_id integer [ref: > orders.id, note: 'ON DELETE CASCADE']
+  product_id integer [ref: > products.id]
+  variant_id integer [ref: > product_variants.id]
   quantity integer [not null]
-  price integer [not null]
-  created_at timestamp
-}
+  price integer [not null, note: 'đơn giá VND']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
 
-Table order_status_history {
-  id integer [pk]
-  order_id integer
-  status varchar(20) [not null]
-  notes text
-  updated_by uuid
-  created_at timestamp
+  indexes {
+    order_id [name: 'idx_order_items_order']
+    product_id [name: 'idx_order_items_product']
+  }
 }
 
 Table shipping {
   id integer [pk]
-  order_id integer
+  order_id integer [ref: > orders.id, note: 'ON DELETE CASCADE']
   shipping_provider varchar(50)
   tracking_number varchar(100)
   shipping_fee decimal(10, 2) [not null]
   estimated_delivery_date timestamp
-  status varchar(20) [default: 'pending']
+  status varchar(20) [default: 'pending', note: 'pending|picked_up|in_transit|delivered|failed|returned']
   notes text
-  created_at timestamp
-  updated_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    order_id [name: 'idx_shipping_order']
+    tracking_number [name: 'idx_shipping_tracking']
+  }
 }
 
 Table payment_transactions {
   id integer [pk]
-  order_id integer
+  order_id integer [ref: > orders.id, note: 'ON DELETE CASCADE']
   transaction_id varchar(100) [unique]
   payment_gateway varchar(50) [not null]
   amount decimal(10, 2) [not null]
   status varchar(20) [not null, default: 'pending']
   response_data jsonb
   error_message text
-  created_at timestamp
-  updated_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    order_id [name: 'idx_payment_transactions_order']
+    transaction_id [name: 'idx_payment_transactions_transaction_id']
+    status [name: 'idx_payment_transactions_status']
+    payment_gateway [name: 'idx_payment_transactions_gateway']
+    created_at [name: 'idx_payment_transactions_created_at']
+  }
 }
 
 Table reviews {
   id integer [pk]
-  user_id uuid
-  product_id integer
-  order_id integer
-  rating integer
+  user_id uuid [ref: > users.id, note: 'ON DELETE SET NULL']
+  product_id integer [ref: > products.id]
+  order_id integer [ref: > orders.id]
+  rating integer [note: 'CHECK 1..5']
   comment text
-  image_urls varchar[]
+  image_urls text[]
   video_url varchar(500)
   reply text
   replied_at timestamp
-  replied_by uuid
+  replied_by uuid [ref: > users.id, note: 'ON DELETE SET NULL']
   helpful_count integer [default: 0]
   is_approved boolean [default: true]
-  created_at timestamp
-  updated_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
   deleted_at timestamp
+
+  indexes {
+    product_id [name: 'idx_reviews_product']
+    rating [name: 'idx_reviews_rating']
+    created_at [name: 'idx_reviews_created_at']
+    (product_id, rating) [name: 'idx_reviews_product_rating']
+    (user_id, product_id, order_id) [name: 'reviews_unique_user_product_order', unique]
+  }
 }
 
 Table refunds {
   id integer [pk]
   refund_number varchar(50) [unique, not null]
-  order_id integer
-  user_id uuid
-  type varchar(20) [not null]
+  order_id integer [ref: > orders.id, note: 'ON DELETE CASCADE']
+  user_id uuid [ref: > users.id, note: 'ON DELETE CASCADE']
+  type varchar(20) [not null, note: 'refund|return|exchange']
   reason text [not null]
-  status varchar(20) [default: 'pending']
+  status varchar(20) [default: 'pending', note: 'pending|approved|rejected|processing|completed|cancelled']
   refund_amount decimal(10, 2)
   admin_notes text
-  processed_by uuid
+  processed_by uuid [ref: > users.id]
   processed_at timestamp
-  created_at timestamp
-  updated_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    order_id [name: 'idx_refunds_order']
+    user_id [name: 'idx_refunds_user']
+    status [name: 'idx_refunds_status']
+  }
 }
 
 Table refund_items {
   id integer [pk]
-  refund_id integer
-  order_item_id integer
+  refund_id integer [ref: > refunds.id, note: 'ON DELETE CASCADE']
+  order_item_id integer [ref: > order_items.id, note: 'ON DELETE CASCADE']
   quantity integer [not null]
   refund_amount decimal(10, 2) [not null]
   reason text
-  created_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    refund_id [name: 'idx_refund_items_refund']
+  }
 }
 
 Table user_addresses {
   id integer [pk]
-  user_id uuid
+  user_id uuid [ref: > users.id, note: 'ON DELETE CASCADE']
   full_name varchar(255) [not null]
-  phone varchar(10) [not null, note: 'Số điện thoại Việt Nam (10 số)']
+  phone varchar(10) [not null]
   province varchar(100) [not null]
   district varchar(100) [not null]
   ward varchar(100) [not null]
   street_address text [not null]
   is_default boolean [default: false]
-  created_at timestamp
-  updated_at timestamp
-  deleted_at timestamp [note: 'Soft delete - địa chỉ bị xóa']
-  
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+  deleted_at timestamp [note: 'Soft delete']
+
   indexes {
     user_id [name: 'idx_user_addresses_user']
     (user_id, is_default) [name: 'idx_user_addresses_default']
@@ -286,70 +377,46 @@ Table user_addresses {
 
 Table wishlist {
   id integer [pk]
-  user_id uuid
-  product_id integer
-  created_at timestamp
-}
+  user_id uuid [ref: > users.id, note: 'ON DELETE CASCADE']
+  product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
 
-Table stock_history {
-  id integer [pk]
-  product_id integer
-  variant_id integer
-  type varchar(20) [not null]
-  quantity integer [not null]
-  previous_stock integer [not null]
-  new_stock integer [not null]
-  reason text
-  created_by uuid
-  created_at timestamp
+  indexes {
+    user_id [name: 'idx_wishlist_user']
+    product_id [name: 'idx_wishlist_product']
+    (user_id, product_id) [name: 'wishlist_unique', unique]
+  }
 }
-
-Table stock_alerts {
-  id integer [pk]
-  product_id integer
-  variant_id integer
-  threshold integer [not null, default: 10]
-  current_stock integer [not null]
-  is_notified boolean [default: false]
-  notified_at timestamp
-  created_at timestamp
-  updated_at timestamp
-}
-
-Table daily_statistics {
-  id integer [pk]
-  date date [unique, not null]
-  total_orders integer [default: 0]
-  total_revenue decimal(10, 2) [default: 0]
-  total_users integer [default: 0]
-  created_at timestamp
-}
-
-// faqs & support_tickets & ticket_messages đã bỏ – không dùng luồng FAQ / ticket hỗ trợ nữa
 
 Table notifications {
   id integer [pk]
-  user_id uuid
-  type varchar [not null, note: 'enum: order_placed, order_shipped, order_delivered, order_cancelled, payment_success, payment_failed, review_request, promotion, system, support_ticket']
+  user_id uuid [ref: > users.id, note: 'ON DELETE CASCADE']
+  type notification_type [not null]
   title varchar(255) [not null]
   message text [not null]
   link varchar(500)
   is_read boolean [default: false]
-  created_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    user_id [name: 'idx_notifications_user']
+    type [name: 'idx_notifications_type']
+    is_read [name: 'idx_notifications_is_read']
+  }
 }
 
 Table audit_logs {
   id integer [pk]
-  user_id uuid
+  user_id uuid [ref: > users.id, note: 'ON DELETE SET NULL']
   action varchar(100) [not null]
   table_name varchar(100) [not null]
   record_id integer
-  old_data jsonb [note: 'Dữ liệu đã được lọc/mask các trường nhạy cảm (password, credit_card, v.v.)']
-  new_data jsonb [note: 'Dữ liệu đã được lọc/mask các trường nhạy cảm']
-  severity varchar(20) [default: 'info', note: 'enum: info, warning, critical']
-  created_at timestamp
-  expires_at timestamp [note: 'Tự động xóa sau 2 năm (retention policy)']
-  
+  old_data jsonb
+  new_data jsonb
+  severity varchar(20) [default: 'info', note: 'info|warning|critical']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  expires_at timestamp [default: `CURRENT_TIMESTAMP + interval ''2 years''`]
+
   indexes {
     (table_name, record_id) [name: 'idx_audit_logs_table_record']
     user_id [name: 'idx_audit_logs_user']
@@ -358,42 +425,3 @@ Table audit_logs {
     severity [name: 'idx_audit_logs_severity']
   }
 }
-
-// Relationships
-Ref: verification_codes.user_id > users.id
-Ref: products.category_id > categories.id
-Ref: product_media.product_id > products.id
-Ref: product_tag_relations.product_id > products.id
-Ref: product_tag_relations.tag_id > product_tags.id
-Ref: cart_items.user_id > users.id
-Ref: cart_items.product_id > products.id
-Ref: cart_items.variant_id > product_variants.id
-Ref: orders.user_id > users.id
-Ref: orders.cancelled_by > users.id
-Ref: order_items.order_id > orders.id
-Ref: order_items.product_id > products.id
-Ref: order_items.variant_id > product_variants.id
-Ref: order_status_history.order_id > orders.id
-Ref: order_status_history.updated_by > users.id
-Ref: shipping.order_id > orders.id
-Ref: payment_transactions.order_id > orders.id
-Ref: reviews.user_id > users.id
-Ref: reviews.product_id > products.id
-Ref: reviews.order_id > orders.id
-Ref: reviews.replied_by > users.id
-Ref: refunds.order_id > orders.id
-Ref: refunds.user_id > users.id
-Ref: refunds.processed_by > users.id
-Ref: refund_items.refund_id > refunds.id
-Ref: refund_items.order_item_id > order_items.id
-Ref: user_addresses.user_id > users.id
-Ref: wishlist.user_id > users.id
-Ref: wishlist.product_id > products.id
-Ref: stock_history.product_id > products.id
-Ref: stock_history.variant_id > product_variants.id
-Ref: stock_history.created_by > users.id
-Ref: stock_alerts.product_id > products.id
-Ref: stock_alerts.variant_id > product_variants.id
-Ref: notifications.user_id > users.id
-Ref: audit_logs.user_id > users.id
-

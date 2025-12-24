@@ -19,11 +19,13 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
 
     const selectClause =
       'SELECT p.*, c.name as category_name, ' +
-      // Mảng tất cả ảnh (type = image)
-      '(SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id),' +
-      " ARRAY[]::text[]) FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls, " +
-      // Video đầu tiên (type = video)
-      "(SELECT pm.image_url FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'video' ORDER BY pm.display_order, pm.id LIMIT 1) AS video_url, " +
+      // Mảng tất cả ảnh của sản phẩm chính (không phải variant) - DISTINCT để tránh duplicate
+      "(SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[]) " +
+      "FROM (SELECT DISTINCT ON (pm.image_url) pm.image_url, pm.display_order, pm.id " +
+      "FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL " +
+      "ORDER BY pm.image_url, pm.display_order, pm.id) pm) AS image_urls, " +
+      // Video đầu tiên của sản phẩm chính (không phải variant)
+      "(SELECT pm.image_url FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL ORDER BY pm.display_order, pm.id LIMIT 1) AS video_url, " +
       // Flag trong wishlist
       'CASE WHEN $1::uuid IS NULL THEN false ELSE EXISTS (SELECT 1 FROM wishlist w WHERE w.user_id = $1::uuid AND w.product_id = p.id) END as is_in_wishlist ';
 
@@ -107,41 +109,99 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
 // Get all products
 export const getProducts = async (req: AuthRequest, res: Response) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
+    const { page = 1, limit = 20, category_id, category_slug, search } = req.query;
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
     const userId = req.user?.id || null;
 
+    // Build WHERE clause for filters (without userId)
+    let whereClause = 'WHERE p.is_active = TRUE AND p.deleted_at IS NULL';
+    const filterParams: any[] = [];
+    let filterParamCount = 0;
+    let categoryIdForFilter: number | null = null;
+
+    // Handle category filter
+    if (category_id) {
+      filterParamCount++;
+      whereClause += ` AND p.category_id = $${filterParamCount}`;
+      filterParams.push(category_id);
+      categoryIdForFilter = parseInt(category_id as string);
+    } else if (category_slug) {
+      // Map category_slug -> id (chỉ lấy category chưa xóa)
+      const slugResult = await pool.query(
+        'SELECT id FROM categories WHERE slug = $1 AND deleted_at IS NULL',
+        [category_slug]
+      );
+      if (slugResult.rows.length > 0) {
+        filterParamCount++;
+        whereClause += ` AND p.category_id = $${filterParamCount}`;
+        filterParams.push(slugResult.rows[0].id);
+        categoryIdForFilter = slugResult.rows[0].id;
+      } else {
+        // Nếu không tìm thấy category với slug này, trả về empty result
+        return ResponseHandler.success(res, {
+          data: [],
+          pagination: {
+            page: pageNum,
+            limit: limitNum,
+            total: 0,
+            totalPages: 0,
+          },
+        });
+      }
+    }
+
+    // Handle search
+    if (search) {
+      filterParamCount++;
+      whereClause += ` AND (
+        p.name ILIKE $${filterParamCount} 
+        OR p.description ILIKE $${filterParamCount}
+        OR p.sku ILIKE $${filterParamCount}
+      )`;
+      filterParams.push(`%${search}%`);
+    }
+
+    // Build params for main query (includes userId, limit, offset)
+    const queryParams = [...filterParams, userId, limitNum, (pageNum - 1) * limitNum];
+    const userIdParamIndex = filterParamCount + 1;
+    const limitParamIndex = filterParamCount + 2;
+    const offsetParamIndex = filterParamCount + 3;
+
     const result = await pool.query(
       `SELECT p.*,
               c.name as category_name,
-              -- Tất cả ảnh
+              -- Tất cả ảnh của sản phẩm chính (không phải variant) - DISTINCT để tránh duplicate
               (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
-               FROM product_media pm
-               WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls,
-              -- Video đầu tiên
+               FROM (
+                 SELECT DISTINCT ON (pm.image_url) pm.image_url, pm.display_order, pm.id
+                 FROM product_media pm
+                 WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL
+                 ORDER BY pm.image_url, pm.display_order, pm.id
+               ) pm) AS image_urls,
+              -- Video đầu tiên của sản phẩm chính (không phải variant)
               (SELECT pm.image_url
                FROM product_media pm
-               WHERE pm.product_id = p.id AND pm.type = 'video'
+               WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL
                ORDER BY pm.display_order, pm.id
                LIMIT 1) AS video_url,
-              CASE WHEN $3::uuid IS NULL THEN false
+              CASE WHEN $${userIdParamIndex}::uuid IS NULL THEN false
                    ELSE EXISTS (
                      SELECT 1 FROM wishlist w
-                     WHERE w.user_id = $3::uuid AND w.product_id = p.id
+                     WHERE w.user_id = $${userIdParamIndex}::uuid AND w.product_id = p.id
                    )
               END as is_in_wishlist
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
-       WHERE p.is_active = TRUE AND p.deleted_at IS NULL
+       ${whereClause}
        ORDER BY p.created_at DESC
-       LIMIT $1 OFFSET $2`,
-      [limitNum, (pageNum - 1) * limitNum, userId]
+       LIMIT $${limitParamIndex} OFFSET $${offsetParamIndex}`,
+      queryParams
     );
 
-    const countResult = await pool.query(
-      'SELECT COUNT(*) FROM products WHERE is_active = TRUE AND deleted_at IS NULL'
-    );
+    // Count total with same filters (no userId, limit, offset)
+    const countQuery = `SELECT COUNT(*) FROM products p ${whereClause}`;
+    const countResult = await pool.query(countQuery, filterParams);
     const total = parseInt(countResult.rows[0].count);
 
     return ResponseHandler.success(res, {
@@ -154,7 +214,8 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error: any) {
-    return ResponseHandler.internalError(res, error.message || 'Lỗi lấy danh sách sản phẩm');
+    logger.error('Error fetching products', error instanceof Error ? error : new Error(String(error)));
+    return ResponseHandler.internalError(res, error.message || 'Lỗi lấy danh sách sản phẩm', error);
   }
 };
 
@@ -205,14 +266,14 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
     const result = await pool.query(
       `SELECT p.*,
        c.name as category_name,
-       -- Tất cả ảnh
+       -- Tất cả ảnh của product (không phải variant images)
        (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
         FROM product_media pm
-        WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls,
-       -- Video đầu tiên
+        WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL) AS image_urls,
+       -- Video đầu tiên của product (không phải variant video)
        (SELECT pm.image_url
         FROM product_media pm
-        WHERE pm.product_id = p.id AND pm.type = 'video'
+        WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL
         ORDER BY pm.display_order, pm.id
         LIMIT 1) AS video_url,
        CASE WHEN $2::uuid IS NULL THEN false
@@ -226,7 +287,10 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
          'variant_type', pv.variant_type,
          'variant_value', pv.variant_value,
          'price_adjustment', pv.price_adjustment,
-         'stock_quantity', pv.stock_quantity
+         'stock_quantity', pv.stock_quantity,
+         'image_urls', (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+                        FROM product_media pm
+                        WHERE pm.variant_id = pv.id AND pm.type = 'image')
        )) FROM product_variants pv WHERE pv.product_id = p.id AND pv.deleted_at IS NULL) as variants
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
@@ -325,16 +389,68 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 
     const product = result.rows[0];
 
+    // Xử lý image URLs từ body (nếu có)
+    const imageUrls = Array.isArray(body.image_urls) 
+      ? body.image_urls 
+      : typeof body.image_urls === 'string' 
+        ? [body.image_urls] 
+        : [];
+
+    // Xử lý image files upload
+  let uploadedImageUrls: string[] = [];
+  if (files?.image_files && files.image_files.length > 0) {
+    const uploadResult = await uploadMultipleFiles(
+      files.image_files.map(file => ({
+        buffer: file.buffer,
+        fileName: file.originalname,
+        mimeType: file.mimetype,
+      }))
+    );
+    uploadedImageUrls = uploadResult.urls;
+  }
+
+    // Kết hợp tất cả image URLs
+    const allImageUrls = [...imageUrls, ...uploadedImageUrls];
+
+    // Lưu images vào product_media
+    if (allImageUrls.length > 0) {
+      for (let i = 0; i < allImageUrls.length; i++) {
+        await pool.query(
+          `INSERT INTO product_media (product_id, variant_id, type, image_url, display_order, is_primary)
+           VALUES ($1, NULL, 'image', $2, $3, $4)`,
+          [product.id, allImageUrls[i], i, i === 0] // Ảnh đầu tiên là primary, variant_id = NULL cho product images
+        );
+      }
+    }
+
     // Nếu có videoUrl, lưu vào product_media với type = 'video'
     if (videoUrl) {
       await pool.query(
-        `INSERT INTO product_media (product_id, type, image_url, display_order, is_primary)
-         VALUES ($1, 'video', $2, 0, FALSE)`,
-        [product.id, videoUrl]
-    );
+        `INSERT INTO product_media (product_id, variant_id, type, image_url, display_order, is_primary)
+         VALUES ($1, NULL, 'video', $2, 0, FALSE)`,
+        [product.id, videoUrl] // variant_id = NULL cho product video
+      );
     }
 
-    return ResponseHandler.created(res, product, 'Thêm sản phẩm thành công');
+    // Lấy lại product với images và video
+    const finalResult = await pool.query(
+      `SELECT p.*,
+              c.name as category_name,
+              (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+               FROM product_media pm
+               WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls,
+              (SELECT pm.image_url
+               FROM product_media pm
+               WHERE pm.product_id = p.id AND pm.type = 'video'
+               ORDER BY pm.display_order, pm.id
+               LIMIT 1) AS video_url
+       FROM products p
+       LEFT JOIN categories c ON p.category_id = c.id
+       WHERE p.id = $1`,
+      [product.id]
+    );
+
+    return ResponseHandler.created(res, finalResult.rows[0], 'Thêm sản phẩm thành công');
   } catch (error: any) {
     logger.error('Create product error', error instanceof Error ? error : new Error(String(error)), {
       categoryId: category_id,
@@ -401,8 +517,10 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Không có trường nào để cập nhật', 400);
     }
 
-    paramCount++;
+    // Thêm updated_at = NOW() (không cần parameter, không tăng paramCount)
     updateFields.push(`updated_at = NOW()`);
+    
+    // Thêm id vào values và tăng paramCount cho WHERE clause
     paramCount++;
     values.push(id);
 
@@ -412,13 +530,100 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       values
     );
 
-    return ResponseHandler.success(res, result.rows[0], 'Cập nhật sản phẩm thành công');
+    // Xử lý cập nhật images nếu có image_urls trong body
+    if (updates.image_urls !== undefined) {
+      try {
+        // Xóa tất cả images cũ của product (không phải của variant)
+        await pool.query(
+          `DELETE FROM product_media WHERE product_id = $1 AND type = 'image' AND variant_id IS NULL`,
+          [id]
+        );
+
+        // Thêm images mới
+        const imageUrls = Array.isArray(updates.image_urls) 
+          ? updates.image_urls 
+          : typeof updates.image_urls === 'string' 
+            ? [updates.image_urls] 
+            : [];
+
+        if (imageUrls.length > 0) {
+          for (let i = 0; i < imageUrls.length; i++) {
+            try {
+              await pool.query(
+                `INSERT INTO product_media (product_id, variant_id, type, image_url, display_order, is_primary)
+                 VALUES ($1, NULL, 'image', $2, $3, $4)`,
+                [id, imageUrls[i], i, i === 0] // Ảnh đầu tiên là primary, variant_id = NULL cho product images
+              );
+            } catch (imageError: any) {
+              logger.error('Error inserting product image', imageError instanceof Error ? imageError : new Error(String(imageError)), {
+                productId: id,
+                imageIndex: i,
+                imageUrl: imageUrls[i],
+                errorMessage: imageError.message,
+                errorCode: imageError.code,
+              });
+              throw new Error(`Lỗi khi lưu hình ảnh thứ ${i + 1}: ${imageError.message || 'Unknown error'}`);
+            }
+          }
+        }
+      } catch (imageError: any) {
+        logger.error('Error updating product images', imageError instanceof Error ? imageError : new Error(String(imageError)), {
+          productId: id,
+          imageUrls: updates.image_urls,
+        });
+        throw imageError; // Re-throw để catch ở ngoài xử lý
+      }
+    }
+
+    // Xử lý cập nhật video nếu có video_url trong body
+    if (updates.video_url !== undefined) {
+      // Xóa video cũ của product (không phải của variant)
+      await pool.query(
+        `DELETE FROM product_media WHERE product_id = $1 AND type = 'video' AND variant_id IS NULL`,
+        [id]
+      );
+
+      // Thêm video mới nếu có
+      if (updates.video_url) {
+        await pool.query(
+          `INSERT INTO product_media (product_id, variant_id, type, image_url, display_order, is_primary)
+           VALUES ($1, NULL, 'video', $2, 0, FALSE)`,
+          [id, updates.video_url] // variant_id = NULL cho product video
+        );
+      }
+    }
+
+    // Lấy lại product với images và video
+    const finalResult = await pool.query(
+      `SELECT p.*,
+              c.name as category_name,
+              (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+               FROM product_media pm
+               WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL) AS image_urls,
+              (SELECT pm.image_url
+               FROM product_media pm
+               WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL
+               ORDER BY pm.display_order, pm.id
+               LIMIT 1) AS video_url
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.id = $1`,
+      [id]
+    );
+
+    return ResponseHandler.success(res, finalResult.rows[0], 'Cập nhật sản phẩm thành công');
   } catch (error: any) {
     logger.error('Error updating product', error instanceof Error ? error : new Error(String(error)), {
       productId: id,
+      body: req.body,
+      errorMessage: error.message,
+      errorCode: error.code,
+      errorDetail: error.detail,
+      errorHint: error.hint,
+      errorStack: error.stack,
       ip: req.ip,
     });
-    return ResponseHandler.internalError(res, 'Lỗi khi cập nhật sản phẩm', error);
+    return ResponseHandler.internalError(res, `Lỗi khi cập nhật sản phẩm: ${error.message || 'Unknown error'}`, error);
   }
 };
 

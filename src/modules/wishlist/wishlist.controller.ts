@@ -16,17 +16,25 @@ export const getWishlist = async (req: AuthRequest, res: Response) => {
          p.price, 
          p.stock_quantity, 
          p.is_active,
-         pm.image_url
+         -- Tất cả ảnh của sản phẩm chính (không phải variant) - DISTINCT để tránh duplicate
+         (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+          FROM (
+            SELECT DISTINCT ON (pm.image_url) pm.image_url, pm.display_order, pm.id
+            FROM product_media pm
+            WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL
+            ORDER BY pm.image_url, pm.display_order, pm.id
+          ) pm) AS image_urls,
+         -- Ảnh đầu tiên để backward compatibility
+         (SELECT pm.image_url
+          FROM product_media pm
+          WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL
+          ORDER BY pm.is_primary DESC, pm.display_order, pm.id
+          LIMIT 1) AS image_url
        FROM wishlist w
        JOIN products p ON w.product_id = p.id
-       LEFT JOIN LATERAL (
-         SELECT image_url
-         FROM product_media
-         WHERE product_id = p.id AND type = 'image'
-         ORDER BY is_primary DESC, display_order, id
-         LIMIT 1
-       ) pm ON TRUE
-       WHERE w.user_id = $1
+       WHERE w.user_id = $1 
+         AND p.deleted_at IS NULL
+         AND p.is_active = TRUE
        ORDER BY w.created_at DESC`,
       [userId]
     );

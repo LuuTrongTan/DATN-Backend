@@ -189,19 +189,6 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
             await client.query('UPDATE products SET stock_quantity = $1 WHERE id = $2', [newStock, item.product_id]);
           }
 
-          // Ghi lịch sử hoàn kho
-          await client.query(
-            `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
-             VALUES ($1, $2, 'adjustment', $3, $4, $5, $6, NULL)`,
-            [
-              item.product_id,
-              item.variant_id || null,
-              item.quantity,
-              currentStock,
-              newStock,
-              `Hoàn kho do thanh toán VNPay thất bại cho đơn #${lockedOrder.order_number}`,
-            ]
-          );
         }
 
         // Cập nhật trạng thái thanh toán

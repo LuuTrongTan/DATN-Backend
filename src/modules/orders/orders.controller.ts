@@ -129,20 +129,17 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       // Create order with all required fields from schema
       const orderResult = await client.query(
         `INSERT INTO orders (
-          user_id, order_number, customer_name, customer_phone, customer_email,
+          user_id, order_number,
           subtotal, discount_amount, tax_amount, shipping_fee, total_amount,
           shipping_address, payment_method, payment_status, order_status, notes
         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-         RETURNING id, user_id, order_number, customer_name, customer_phone, customer_email,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id, user_id, order_number,
           subtotal, discount_amount, tax_amount, shipping_fee, total_amount,
           order_status, payment_status, shipping_address, payment_method, notes, created_at, updated_at`,
         [
           userId,
           orderNumber,
-          user.full_name || validated.customer_name || null,
-          user.phone || validated.customer_phone || null,
-          user.email || validated.customer_email || null,
           subtotal,
           discountAmount,
           taxAmount,
@@ -203,20 +200,6 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
           );
         }
 
-        // Create stock history
-        await client.query(
-          `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
-           VALUES ($1, $2, 'out', $3, $4, $5, $6, $7)`,
-          [
-            item.product_id,
-            item.variant_id || null,
-            item.quantity,
-            currentStock,
-            newStock,
-            `Đơn hàng #${order.order_number}`,
-            userId,
-          ]
-        );
       }
 
       // Clear cart
@@ -380,38 +363,111 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
     }
 
-    const result = await pool.query(
-      `SELECT o.*,
-       (SELECT json_agg(json_build_object(
-         'id', oi.id,
-         'product_id', oi.product_id,
-         'product_name', p.name,
-         'quantity', oi.quantity,
-         'price', oi.price
-       )) FROM order_items oi 
-       JOIN products p ON oi.product_id = p.id
-       WHERE oi.order_id = o.id) as items,
-       (SELECT json_agg(json_build_object(
-         'status', osh.status,
-         'notes', osh.notes,
-         'created_at', osh.created_at
-       )) FROM order_status_history osh 
-       WHERE osh.order_id = o.id ORDER BY osh.created_at DESC) as status_history
+    logger.info('Fetching order by ID', { orderId: id, userId });
+
+    // Lấy thông tin đơn hàng cơ bản
+    const orderResult = await pool.query(
+      `SELECT o.*
        FROM orders o
-      WHERE o.id = $1 AND o.user_id = $2 AND o.deleted_at IS NULL`,
+       WHERE o.id = $1 AND o.user_id = $2 AND o.deleted_at IS NULL`,
       [id, userId]
     );
 
-    if (result.rows.length === 0) {
+    if (orderResult.rows.length === 0) {
       return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
     }
 
-    return ResponseHandler.success(res, { order: result.rows[0] }, 'Lấy thông tin đơn hàng thành công');
+    const order = orderResult.rows[0];
+
+    // Lấy order items với product và variant info
+    const itemsResult = await pool.query(
+      `SELECT 
+         oi.id,
+         oi.product_id,
+         oi.variant_id,
+         oi.quantity,
+         oi.price,
+         p.id as product_id_full,
+         p.name as product_name,
+         p.price as product_price,
+         pv.id as variant_id_full,
+         pv.variant_type,
+         pv.variant_value,
+         pv.price_adjustment
+       FROM order_items oi 
+       JOIN products p ON oi.product_id = p.id
+       LEFT JOIN product_variants pv ON oi.variant_id = pv.id
+       WHERE oi.order_id = $1`,
+      [id]
+    );
+
+    // Lấy images cho từng product và variant
+    const items = await Promise.all(
+      itemsResult.rows.map(async (item) => {
+        // Lấy product images
+        const productImagesResult = await pool.query(
+          `SELECT image_url 
+           FROM product_media 
+           WHERE product_id = $1 AND type = 'image' AND variant_id IS NULL 
+           ORDER BY display_order, id`,
+          [item.product_id]
+        );
+        const productImageUrls = productImagesResult.rows.map((row: any) => row.image_url);
+
+        // Lấy variant images nếu có variant
+        let variantImageUrls: string[] = [];
+        if (item.variant_id) {
+          const variantImagesResult = await pool.query(
+            `SELECT image_url 
+             FROM product_media 
+             WHERE variant_id = $1 AND type = 'image' 
+             ORDER BY display_order, id`,
+            [item.variant_id]
+          );
+          variantImageUrls = variantImagesResult.rows.map((row: any) => row.image_url);
+        }
+
+        return {
+          id: item.id,
+          product_id: item.product_id,
+          variant_id: item.variant_id,
+          quantity: item.quantity,
+          price: item.price,
+          product: {
+            id: item.product_id_full,
+            name: item.product_name,
+            price: item.product_price,
+            image_urls: productImageUrls,
+          },
+          variant: item.variant_id_full
+            ? {
+                id: item.variant_id_full,
+                variant_type: item.variant_type,
+                variant_value: item.variant_value,
+                price_adjustment: item.price_adjustment,
+                image_urls: variantImageUrls,
+              }
+            : null,
+        };
+      })
+    );
+
+    // Kết hợp tất cả
+    const orderWithDetails = {
+      ...order,
+      items,
+    };
+
+    logger.info('Order fetched successfully', { orderId: id, itemsCount: items.length });
+
+    return ResponseHandler.success(res, { order: orderWithDetails }, 'Lấy thông tin đơn hàng thành công');
   } catch (error: any) {
     logger.error('Error fetching order', error instanceof Error ? error : new Error(String(error)), {
       orderId: id,
       userId: req.user?.id,
       ip: req.ip,
+      errorMessage: error.message,
+      errorStack: error.stack,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi lấy thông tin đơn hàng', error);
   }
@@ -494,20 +550,6 @@ export const cancelOrder = async (req: AuthRequest, res: Response) => {
         await client.query('UPDATE products SET stock_quantity = $1 WHERE id = $2', [newStock, item.product_id]);
       }
 
-      // Ghi lịch sử hoàn kho do hủy đơn
-      await client.query(
-        `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
-         VALUES ($1, $2, 'adjustment', $3, $4, $5, $6, $7)`,
-        [
-          item.product_id,
-          item.variant_id || null,
-          item.quantity,
-          currentStock,
-          newStock,
-          `Hoàn kho do hủy đơn #${order.order_number}`,
-          userId,
-        ]
-      );
     }
 
     // Cập nhật trạng thái đơn

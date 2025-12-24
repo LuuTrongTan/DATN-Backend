@@ -20,13 +20,11 @@ router.post('/categories/:id/restore', requireRole('admin', 'staff'), adminContr
 // Quản lý sản phẩm (admin)
 router.get('/products', requireRole('admin', 'staff'), adminController.getProductsAdmin);
 router.get('/products/:id', requireRole('admin', 'staff'), adminController.getProductAdmin);
+router.post('/products/:id/restore', requireRole('admin', 'staff'), adminController.restoreProductAdmin);
 
 // Quản lý kho (admin)
 router.post('/inventory/stock-in', requireRole('admin', 'staff'), inventoryController.stockIn);
 router.post('/inventory/stock-adjustment', requireRole('admin', 'staff'), inventoryController.stockAdjustment);
-router.get('/inventory/history', requireRole('admin', 'staff'), inventoryController.getStockHistory);
-router.get('/inventory/alerts', requireRole('admin', 'staff'), inventoryController.getStockAlerts);
-router.put('/inventory/alerts/:id/notify', requireRole('admin', 'staff'), inventoryController.markAlertAsNotified);
 
 // UC-21: Xử lý đơn hàng
 router.get('/orders', adminController.getAllOrders);

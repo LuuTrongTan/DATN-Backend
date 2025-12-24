@@ -57,20 +57,10 @@ Mỗi model file chứa:
 - **Migration**: `008_create_order_items_table`
 - **Fields**: id, order_id, product_id, variant_id, quantity, price, created_at
 
-### 9. OrderStatusHistory Model (`order-status-history.model.ts`)
-- **Bảng**: `order_status_history`
-- **Migration**: `009_create_order_status_history_table`
-- **Fields**: id, order_id, status, notes, updated_by, created_at
-
-### 10. Review Model (`review.model.ts`)
+### 9. Review Model (`review.model.ts`)
 - **Bảng**: `reviews`
 - **Migration**: `010_create_reviews_table`
 - **Fields**: id, user_id, product_id, order_id, rating, comment, image_urls, video_url, is_approved, created_at, updated_at
-
-### 11. DailyStatistics Model (`daily-statistics.model.ts`)
-- **Bảng**: `daily_statistics`
-- **Migration**: `011_create_daily_statistics_table`
-- **Fields**: id, date, total_orders, total_revenue, total_users, created_at
 
 ## Cách sử dụng
 
