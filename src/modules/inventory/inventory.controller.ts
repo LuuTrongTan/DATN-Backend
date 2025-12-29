@@ -64,25 +64,7 @@ export const stockIn = async (req: AuthRequest, res: Response) => {
       );
     }
 
-    // Create stock history
-    await client.query(
-      `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
-       VALUES ($1, $2, 'in', $3, $4, $5, $6, $7)`,
-      [
-        product_id || null,
-        variant_id || null,
-        quantity,
-        currentStock,
-        newStock,
-        reason || null,
-        req.user!.id,
-      ]
-    );
-
     await client.query('COMMIT');
-
-    // Check and update stock alerts (ngoài transaction, không quan trọng tới tính toàn vẹn đơn)
-    await checkAndUpdateStockAlerts(product_id, variant_id, newStock);
 
     return ResponseHandler.success(
       res,
@@ -168,25 +150,7 @@ export const stockAdjustment = async (req: AuthRequest, res: Response) => {
       );
     }
 
-    // Create stock history
-    await client.query(
-      `INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
-       VALUES ($1, $2, 'adjustment', $3, $4, $5, $6, $7)`,
-      [
-        product_id || null,
-        variant_id || null,
-        Math.abs(difference),
-        currentStock,
-        new_quantity,
-        reason || null,
-        req.user!.id,
-      ]
-    );
-
     await client.query('COMMIT');
-
-    // Check and update stock alerts (ngoài transaction)
-    await checkAndUpdateStockAlerts(product_id, variant_id, new_quantity);
 
     return ResponseHandler.success(
       res,
@@ -441,5 +405,4 @@ async function checkAndUpdateStockAlerts(
     }
   }
 }
-
 

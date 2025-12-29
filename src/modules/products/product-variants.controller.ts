@@ -90,9 +90,62 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
       ]
     );
 
+    const variant = result.rows[0];
+
+    // Xử lý variant images nếu có
+    const variantImageUrls = Array.isArray(validated.image_urls) 
+      ? validated.image_urls 
+      : typeof validated.image_urls === 'string' 
+        ? [validated.image_urls] 
+        : [];
+
+    if (variantImageUrls.length > 0) {
+      try {
+        for (let i = 0; i < variantImageUrls.length; i++) {
+          await pool.query(
+            `INSERT INTO product_media (product_id, variant_id, type, image_url, display_order, is_primary)
+             VALUES ($1, $2, 'image', $3, $4, $5)`,
+            [product_id, variant.id, variantImageUrls[i], i, i === 0] // Ảnh đầu tiên là primary
+          );
+        }
+      } catch (imageError: any) {
+        // Log lỗi chi tiết
+        logger.error('Error inserting variant images', imageError instanceof Error ? imageError : new Error(String(imageError)), {
+          productId: product_id,
+          variantId: variant.id,
+          imageUrls: variantImageUrls,
+          errorMessage: imageError.message,
+          errorCode: imageError.code,
+        });
+        
+        // Nếu lỗi là do cột variant_id chưa tồn tại, throw error để user biết cần chạy migration
+        if (imageError.message && (
+          imageError.message.includes('variant_id') || 
+          imageError.message.includes('column') ||
+          imageError.code === '42703' // PostgreSQL error code for undefined column
+        )) {
+          throw new Error('Cột variant_id chưa tồn tại trong product_media. Vui lòng chạy migration: npm run migrate hoặc node dist/connections/db/migrate.js');
+        }
+        
+        // Các lỗi khác: throw để user biết
+        throw new Error(`Lỗi khi lưu hình ảnh biến thể: ${imageError.message || 'Unknown error'}`);
+      }
+    }
+
+    // Query lại variant với images
+    const variantWithImages = await pool.query(
+      `SELECT pv.*,
+              (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+               FROM product_media pm
+               WHERE pm.variant_id = pv.id AND pm.type = 'image') AS image_urls
+       FROM product_variants pv
+       WHERE pv.id = $1`,
+      [variant.id]
+    );
+
     return ResponseHandler.success(res, {
       message: 'Tạo biến thể thành công',
-      data: result.rows[0],
+      data: variantWithImages.rows[0],
     });
   } catch (error: any) {
     if (error.name === 'ZodError') {
@@ -100,9 +153,12 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
     }
     logger.error('Error creating variant', error instanceof Error ? error : new Error(String(error)), {
       productId: product_id,
+      body: req.body,
+      errorMessage: error.message,
+      errorStack: error.stack,
       ip: req.ip,
     });
-    return ResponseHandler.internalError(res, 'Lỗi tạo biến thể', error);
+    return ResponseHandler.internalError(res, `Lỗi tạo biến thể: ${error.message || 'Unknown error'}`, error);
   }
 };
 
@@ -111,10 +167,14 @@ export const getVariantsByProduct = async (req: AuthRequest, res: Response) => {
   const { product_id } = req.params;
   try {
     const result = await pool.query(
-      `SELECT id, product_id, sku, variant_attributes, price_adjustment, stock_quantity, image_url, is_active, created_at, updated_at 
-       FROM product_variants 
-       WHERE product_id = $1 AND deleted_at IS NULL
-       ORDER BY variant_attributes`,
+      `SELECT pv.id, pv.product_id, pv.sku, pv.variant_attributes, pv.price_adjustment, pv.stock_quantity, pv.image_url, pv.is_active, pv.created_at, pv.updated_at,
+              -- Lấy images của variant từ product_media
+              (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+               FROM product_media pm
+               WHERE pm.variant_id = pv.id AND pm.type = 'image') AS image_urls
+       FROM product_variants pv 
+       WHERE pv.product_id = $1 AND pv.deleted_at IS NULL
+       ORDER BY pv.variant_attributes`,
       [product_id]
     );
 
@@ -133,9 +193,13 @@ export const getVariantById = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
-      `SELECT id, product_id, sku, variant_attributes, price_adjustment, stock_quantity, image_url, is_active, created_at, updated_at 
-       FROM product_variants 
-       WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT pv.id, pv.product_id, pv.sku, pv.variant_attributes, pv.price_adjustment, pv.stock_quantity, pv.image_url, pv.is_active, pv.created_at, pv.updated_at,
+              -- Lấy images của variant từ product_media
+              (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+               FROM product_media pm
+               WHERE pm.variant_id = pv.id AND pm.type = 'image') AS image_urls
+       FROM product_variants pv 
+       WHERE pv.id = $1 AND pv.deleted_at IS NULL`,
       [id]
     );
 
@@ -283,9 +347,48 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
       values
     );
 
+    const variant = result.rows[0];
+
+    // Xử lý cập nhật variant images nếu có image_urls trong body
+    if (validated.image_urls !== undefined) {
+      // Xóa tất cả images cũ của variant
+      await pool.query(
+        `DELETE FROM product_media WHERE variant_id = $1 AND type = 'image'`,
+        [id]
+      );
+
+      // Thêm images mới
+      const imageUrls = Array.isArray(validated.image_urls) 
+        ? validated.image_urls 
+        : typeof validated.image_urls === 'string' 
+          ? [validated.image_urls] 
+          : [];
+
+      if (imageUrls.length > 0) {
+        for (let i = 0; i < imageUrls.length; i++) {
+          await pool.query(
+            `INSERT INTO product_media (product_id, variant_id, type, image_url, display_order, is_primary)
+             VALUES ($1, $2, 'image', $3, $4, $5)`,
+            [variant.product_id, id, imageUrls[i], i, i === 0]
+          );
+        }
+      }
+    }
+
+    // Query lại variant với images
+    const variantWithImages = await pool.query(
+      `SELECT pv.*,
+              (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+               FROM product_media pm
+               WHERE pm.variant_id = pv.id AND pm.type = 'image') AS image_urls
+       FROM product_variants pv
+       WHERE pv.id = $1`,
+      [id]
+    );
+
     return ResponseHandler.success(res, {
       message: 'Cập nhật biến thể thành công',
-      data: result.rows[0],
+      data: variantWithImages.rows[0],
     });
   } catch (error: any) {
     if (error.name === 'ZodError') {

@@ -8,9 +8,6 @@ export interface Order {
   id: number;
   user_id: string; // UUID
   order_number: string; // unique
-  customer_name: string | null;
-  customer_phone: string | null; // varchar(10)
-  customer_email: string | null;
   subtotal: number; // DECIMAL(10, 2) - not null
   discount_amount: number; // DECIMAL(10, 2) - default: 0
   tax_amount: number; // DECIMAL(10, 2) - default: 0
@@ -33,9 +30,6 @@ export interface Order {
 export interface CreateOrderInput {
   user_id: string; // UUID
   order_number: string; // REQUIRED - unique
-  customer_name?: string | null;
-  customer_phone?: string | null;
-  customer_email?: string | null;
   subtotal: number; // REQUIRED
   discount_amount?: number; // default: 0
   tax_amount?: number; // default: 0
@@ -53,9 +47,6 @@ export interface CreateOrderInput {
 }
 
 export interface UpdateOrderInput {
-  customer_name?: string | null;
-  customer_phone?: string | null;
-  customer_email?: string | null;
   subtotal?: number;
   discount_amount?: number;
   tax_amount?: number;

@@ -8,9 +8,6 @@ export const orderSchema = z.object({
   shipping_fee: z.number().nonnegative().optional(),
   discount_amount: z.number().nonnegative().optional(),
   tax_amount: z.number().nonnegative().optional(),
-  customer_name: z.string().optional(),
-  customer_phone: z.string().optional(),
-  customer_email: z.string().email().optional(),
   notes: z.string().optional(),
   address_id: z.number().int().positive().optional(),
 });

@@ -31,6 +31,7 @@ export const createVariantSchema = z.object({
   price_adjustment: z.number().int().optional().default(0),
   stock_quantity: z.number().int().nonnegative().optional().default(0),
   image_url: z.string().max(500).url().optional().nullable(),
+  image_urls: z.union([z.array(z.string()), z.string()]).optional(), // Cho phép array hoặc string
   is_active: z.boolean().optional().default(true),
 });
 
@@ -51,6 +52,7 @@ export const updateVariantSchema = z.object({
   price_adjustment: z.number().int().optional(),
   stock_quantity: z.number().int().nonnegative().optional(),
   image_url: z.string().max(500).url().optional().nullable(),
+  image_urls: z.union([z.array(z.string()), z.string()]).optional(), // Cho phép array hoặc string
   is_active: z.boolean().optional(),
 });
 

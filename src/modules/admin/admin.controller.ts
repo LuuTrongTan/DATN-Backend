@@ -294,24 +294,113 @@ export const restoreCategoryAdmin = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// Khôi phục sản phẩm đã bị xóa mềm (admin)
+export const restoreProductAdmin = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    // Lấy thông tin sản phẩm, bao gồm cả đã xóa mềm
+    const existing = await pool.query(
+      'SELECT id, name, sku, deleted_at FROM products WHERE id = $1',
+      [id]
+    );
+
+    if (existing.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
+    }
+
+    const product = existing.rows[0];
+
+    if (product.deleted_at === null) {
+      return ResponseHandler.error(res, 'Sản phẩm đang hoạt động, không cần khôi phục', 400);
+    }
+
+    // Đảm bảo SKU vẫn unique trong các sản phẩm chưa xóa (nếu có SKU)
+    if (product.sku) {
+      const skuCheck = await pool.query(
+        'SELECT id FROM products WHERE sku = $1 AND id != $2 AND deleted_at IS NULL',
+        [product.sku, id]
+      );
+
+      if (skuCheck.rows.length > 0) {
+        return ResponseHandler.conflict(
+          res,
+          'Không thể khôi phục vì SKU đã được sử dụng bởi sản phẩm khác'
+        );
+      }
+    }
+
+    // Khôi phục sản phẩm
+    const result = await pool.query(
+      `UPDATE products
+       SET deleted_at = NULL,
+           is_active = TRUE,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, category_id, sku, name, description, price, stock_quantity, brand, view_count, sold_count, is_active, created_at, updated_at, deleted_at`,
+      [id]
+    );
+
+    // Khôi phục các variants của sản phẩm
+    await pool.query(
+      `UPDATE product_variants 
+       SET deleted_at = NULL, updated_at = NOW()
+       WHERE product_id = $1 AND deleted_at IS NOT NULL`,
+      [id]
+    );
+
+    return ResponseHandler.success(res, result.rows[0], 'Khôi phục sản phẩm thành công');
+  } catch (error: any) {
+    logger.error(
+      'Error restoring product (admin)',
+      error instanceof Error ? error : new Error(String(error)),
+      { productId: id }
+    );
+    return ResponseHandler.internalError(res, 'Lỗi khi khôi phục sản phẩm', error);
+  }
+};
+
 // Lấy danh sách sản phẩm cho admin (bao gồm inactive/deleted tùy include_deleted)
 export const getProductsAdmin = async (req: AuthRequest, res: Response) => {
-  const { search, category_id, include_deleted } = req.query;
+  const { search, category_id, include_deleted, limit } = req.query;
   const includeDeleted = String(include_deleted || 'false') === 'true';
+  const limitNum = limit ? parseInt(String(limit)) : 200;
+  const finalLimit = limitNum > 0 && limitNum <= 1000 ? limitNum : 200;
 
   try {
     const params: any[] = [];
     let idx = 0;
     let where = 'WHERE 1=1';
+    let cte = '';
 
-    if (!includeDeleted) {
+    // Nếu include_deleted = true, chỉ lấy products đã xóa
+    // Nếu include_deleted = false, chỉ lấy products chưa xóa
+    if (includeDeleted) {
+      where += ' AND p.deleted_at IS NOT NULL';
+    } else {
       where += ' AND p.deleted_at IS NULL';
     }
 
+    // Lọc theo danh mục bao gồm cả danh mục con
     if (category_id) {
       idx++;
-      where += ` AND p.category_id = $${idx}`;
+      const catParamIndex = idx;
       params.push(category_id);
+
+      cte = `
+        WITH RECURSIVE category_tree AS (
+          SELECT id
+          FROM categories
+          WHERE id = $${catParamIndex}
+          UNION ALL
+          SELECT c.id
+          FROM categories c
+          INNER JOIN category_tree ct ON c.parent_id = ct.id
+          WHERE c.deleted_at IS NULL
+        )
+      `;
+
+      where += ` AND p.category_id IN (SELECT id FROM category_tree)`;
     }
 
     if (search) {
@@ -321,17 +410,58 @@ export const getProductsAdmin = async (req: AuthRequest, res: Response) => {
       params.push(q);
     }
 
+    idx++;
+    params.push(finalLimit);
+
     const query = `
+      ${cte}
       SELECT p.*,
-             c.name as category_name
+             c.name as category_name,
+             -- Tất cả ảnh từ product_media (chỉ product images, không phải variant images)
+             (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+              FROM product_media pm
+              WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL) AS image_urls,
+             -- Video đầu tiên
+             (SELECT pm.image_url
+              FROM product_media pm
+              WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL
+              ORDER BY pm.display_order, pm.id
+              LIMIT 1) AS video_url,
+             -- Variants với images
+             (SELECT COALESCE(json_agg(variant_data ORDER BY variant_data->>'variant_type', variant_data->>'variant_value'), '[]'::json)
+              FROM (
+                SELECT json_build_object(
+                  'id', pv.id,
+                  'product_id', pv.product_id,
+                  'variant_type', pv.variant_type,
+                  'variant_value', pv.variant_value,
+                  'price_adjustment', pv.price_adjustment,
+                  'stock_quantity', pv.stock_quantity,
+                  'created_at', pv.created_at,
+                  'image_urls', (
+                    SELECT COALESCE(array_agg(pm2.image_url ORDER BY pm2.display_order, pm2.id), ARRAY[]::text[])
+                    FROM product_media pm2
+                    WHERE pm2.variant_id = pv.id AND pm2.type = 'image'
+                  )
+                ) as variant_data
+                FROM product_variants pv
+                WHERE pv.product_id = p.id AND pv.deleted_at IS NULL
+                ORDER BY pv.variant_type, pv.variant_value
+              ) subq
+             ) AS variants
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
       ${where}
       ORDER BY p.created_at DESC
-      LIMIT 200
+      LIMIT $${idx}
     `;
 
     const result = await pool.query(query, params);
+
+    logger.info('Admin products fetched', {
+      count: result.rows.length,
+      filters: { search, category_id, include_deleted, limit: finalLimit },
+    });
 
     return ResponseHandler.success(res, result.rows, 'Lấy danh sách sản phẩm (admin) thành công');
   } catch (error: any) {
@@ -348,7 +478,17 @@ export const getProductAdmin = async (req: AuthRequest, res: Response) => {
     const result = await pool.query(
       `
         SELECT p.*,
-               c.name as category_name
+               c.name as category_name,
+               -- Tất cả ảnh từ product_media
+               (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
+                FROM product_media pm
+                WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls,
+               -- Video đầu tiên
+               (SELECT pm.image_url
+                FROM product_media pm
+                WHERE pm.product_id = p.id AND pm.type = 'video'
+                ORDER BY pm.display_order, pm.id
+                LIMIT 1) AS video_url
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         WHERE p.id = $1
@@ -373,10 +513,44 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
   const { status, notes } = req.body;
   
   try {
+    // Parse order ID
+    const orderId = parseInt(id, 10);
+    if (isNaN(orderId)) {
+      return ResponseHandler.error(res, 'ID đơn hàng không hợp lệ', 400);
+    }
+
+    logger.info('Updating order status', { orderId, status, userId: req.user?.id });
 
     const validStatuses = Object.values(ORDER_STATUS);
+    logger.info('Valid order statuses:', { validStatuses, receivedStatus: status });
+    
     if (!validStatuses.includes(status)) {
-      return ResponseHandler.error(res, 'Trạng thái đơn hàng không hợp lệ', 400);
+      logger.warn('Invalid order status received', { 
+        receivedStatus: status, 
+        validStatuses,
+        orderId 
+      });
+      return ResponseHandler.error(
+        res, 
+        `Trạng thái đơn hàng không hợp lệ. Các trạng thái hợp lệ: ${validStatuses.join(', ')}`, 
+        400
+      );
+    }
+
+    // Check if order exists first
+    const checkOrder = await pool.query(
+      `SELECT id, deleted_at FROM orders WHERE id = $1`,
+      [orderId]
+    );
+
+    if (checkOrder.rows.length === 0) {
+      logger.warn('Order not found', { orderId });
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
+    }
+
+    if (checkOrder.rows[0].deleted_at) {
+      logger.warn('Order is soft-deleted', { orderId });
+      return ResponseHandler.error(res, 'Đơn hàng đã bị xóa', 400);
     }
 
     // Update order
@@ -385,18 +559,19 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
        SET order_status = $1, updated_at = NOW()
        WHERE id = $2 AND deleted_at IS NULL
        RETURNING id, user_id, order_number, total_amount, order_status, payment_status, shipping_address, payment_method, shipping_fee, notes, created_at, updated_at`,
-      [status, id]
+      [status, orderId]
     );
 
     if (orderResult.rows.length === 0) {
-      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
+      logger.warn('Order update returned no rows', { orderId, status });
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại hoặc đã bị xóa');
     }
 
     // Add to status history
     await pool.query(
       `INSERT INTO order_status_history (order_id, status, notes, updated_by)
        VALUES ($1, $2, $3, $4)`,
-      [id, status, notes || null, req.user!.id]
+      [orderId, status, notes || null, req.user!.id]
     );
 
     // Get user info for email notification
@@ -418,19 +593,22 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
       } catch (error: any) {
         // Log error but don't fail the request
         logger.error('Failed to send order status update email', error instanceof Error ? error : new Error(String(error)), {
-          orderId: id,
+          orderId,
           orderNumber: order.order_number,
           email: userResult.rows[0].email,
         });
       }
     }
 
-    return ResponseHandler.success(res, orderResult.rows[0], 'Cập nhật trạng thái đơn hàng thành công');
+    logger.info('Order status updated successfully', { orderId, status });
+    return ResponseHandler.success(res, { order: orderResult.rows[0] }, 'Cập nhật trạng thái đơn hàng thành công');
   } catch (error: any) {
     logger.error('Error updating order status', error instanceof Error ? error : new Error(String(error)), {
       orderId: id,
       status,
       ip: req.ip,
+      errorMessage: error.message,
+      errorStack: error.stack,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi cập nhật trạng thái đơn hàng', error);
   }
@@ -712,8 +890,11 @@ export const getStatistics = async (req: AuthRequest, res: Response) => {
       params
     );
 
-    // Total users
-    const usersResult = await pool.query('SELECT COUNT(*) as total FROM users WHERE status <> $1', [USER_STATUS.DELETED]);
+    // Total customers (loại trừ admin & staff)
+    const usersResult = await pool.query(
+      'SELECT COUNT(*) as total FROM users WHERE status <> $1 AND role = $2',
+      [USER_STATUS.DELETED, USER_ROLE.CUSTOMER]
+    );
 
     // Top products
     const topProductsResult = await pool.query(

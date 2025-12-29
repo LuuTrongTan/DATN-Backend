@@ -8,10 +8,6 @@ export const migration: Migration = {
         id SERIAL PRIMARY KEY,
         user_id UUID REFERENCES users(id) ON DELETE SET NULL,
         order_number VARCHAR(50) UNIQUE NOT NULL,
-        -- Thông tin khách hàng (backup khi user bị xóa)
-        customer_name VARCHAR(255),
-        customer_phone VARCHAR(10),
-        customer_email VARCHAR(255),
         -- Tính toán giá
         subtotal DECIMAL(10, 2) NOT NULL,
         discount_amount DECIMAL(10, 2) DEFAULT 0,

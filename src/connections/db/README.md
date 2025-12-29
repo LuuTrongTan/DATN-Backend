@@ -50,17 +50,26 @@ Migrations sẽ được chạy tự động theo thứ tự số (001, 002, 003
 
 ### Migration Files
 
-- `001_create_users_table.sql` - Bảng users
-- `002_create_verification_codes_table.sql` - Bảng mã xác thực
-- `003_create_categories_table.sql` - Bảng danh mục
-- `004_create_products_table.sql` - Bảng sản phẩm
-- `005_create_product_variants_table.sql` - Bảng biến thể sản phẩm
-- `006_create_cart_items_table.sql` - Bảng giỏ hàng
-- `007_create_orders_table.sql` - Bảng đơn hàng
-- `008_create_order_items_table.sql` - Bảng chi tiết đơn hàng
-- `009_create_order_status_history_table.sql` - Bảng lịch sử trạng thái đơn hàng
-- `010_create_reviews_table.sql` - Bảng đánh giá
-- `011_create_daily_statistics_table.sql` - Bảng thống kê
+- `20251120_000001_create_users_table` - Bảng users
+- `20251120_000002_create_verification_codes_table` - Bảng mã xác thực
+- `20251120_000003_create_categories_table` - Bảng danh mục
+- `20251120_000004_create_products_table` - Bảng sản phẩm
+- `20251120_000005_create_product_variants_table` - Bảng biến thể sản phẩm
+- `20251120_000006_create_cart_items_table` - Bảng giỏ hàng
+- `20251120_000007_create_orders_table` - Bảng đơn hàng
+- `20251120_000008_create_order_items_table` - Bảng chi tiết đơn hàng
+- `20251120_000009_create_reviews_table` - Bảng đánh giá
+- `20251120_000010_create_user_addresses_table` - Bảng địa chỉ người dùng
+- `20251120_000011_create_wishlist_table` - Bảng wishlist
+- `20251120_000012_create_shipping_table` - Bảng vận chuyển
+- `20251120_000013_create_refunds_table` - Bảng yêu cầu hoàn/đổi
+- `20251120_000014_create_refund_items_table` - Chi tiết sản phẩm hoàn/đổi
+- `20251120_000015_enable_vector_search` - Bật vector search
+- `20251120_000016_create_payment_transactions_table` - Giao dịch thanh toán
+- `20251120_000017_create_notifications_table` - Thông báo
+- `20251120_000018_create_product_tags_table` - Tags sản phẩm
+- `20251120_000019_create_audit_logs_table` - Audit logs
+- `20251120_000020_create_product_media_table` - Media sản phẩm/biến thể
 
 ## Cấu hình
 
