@@ -1,6 +1,7 @@
 import express from 'express';
 import * as productsController from './products.controller';
 import * as variantsController from './product-variants.controller';
+import * as attributesController from './variant-attributes.controller';
 import { authenticate, optionalAuthenticate, requireRole } from '../../middlewares/auth.middleware';
 import { productCreateMiddleware } from './products.upload';
 
@@ -23,6 +24,15 @@ router.post(
 );
 router.put('/:id', authenticate, requireRole('staff', 'admin'), productsController.updateProduct);
 router.delete('/:id', authenticate, requireRole('staff', 'admin'), productsController.deleteProduct);
+
+// Variant Attributes routes (định nghĩa thuộc tính và giá trị)
+router.get('/variant-attributes/all', optionalAuthenticate, attributesController.getAllAttributeDefinitions); // Lấy tất cả thuộc tính (để dùng lại)
+router.get('/:product_id/variant-attributes', optionalAuthenticate, attributesController.getAttributeDefinitionsByProduct);
+router.post('/:product_id/variant-attributes', authenticate, requireRole('staff', 'admin'), attributesController.createAttributeDefinition);
+router.post('/:product_id/variant-attributes/copy', authenticate, requireRole('staff', 'admin'), attributesController.copyAttributesFromProduct); // Copy từ sản phẩm khác
+router.delete('/variant-attributes/:id', authenticate, requireRole('staff', 'admin'), attributesController.deleteAttributeDefinition);
+router.post('/variant-attributes/:definition_id/values', authenticate, requireRole('staff', 'admin'), attributesController.createAttributeValue);
+router.delete('/variant-attributes/values/:id', authenticate, requireRole('staff', 'admin'), attributesController.deleteAttributeValue);
 
 // Variants routes
 router.get('/:product_id/variants', optionalAuthenticate, variantsController.getVariantsByProduct);

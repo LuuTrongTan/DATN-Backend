@@ -87,12 +87,42 @@ Table products {
   deleted_at timestamp
 }
 
+Table variant_attribute_definitions {
+  id integer [pk]
+  product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
+  attribute_name varchar(50) [not null, note: 'Tên thuộc tính: Size, Color, Material, Style...']
+  display_name varchar(100) [not null, note: 'Tên hiển thị: Kích cỡ, Màu sắc, Chất liệu...']
+  display_order integer [default: 0, note: 'Thứ tự hiển thị']
+  is_required boolean [default: false, note: 'Bắt buộc phải có thuộc tính này']
+  created_at timestamp
+  
+  indexes {
+    product_id [name: 'idx_variant_attr_def_product']
+    attribute_name [name: 'idx_variant_attr_def_name']
+  }
+  
+  Note: 'UNIQUE (product_id, attribute_name) - Mỗi sản phẩm chỉ có 1 định nghĩa cho mỗi thuộc tính'
+}
+
+Table variant_attribute_values {
+  id integer [pk]
+  definition_id integer [ref: > variant_attribute_definitions.id, note: 'ON DELETE CASCADE']
+  value varchar(100) [not null, note: 'Giá trị: M, L, XL hoặc Đỏ, Xanh, Vàng...']
+  display_order integer [default: 0, note: 'Thứ tự hiển thị']
+  created_at timestamp
+  
+  indexes {
+    definition_id [name: 'idx_variant_attr_values_def']
+  }
+  
+  Note: 'UNIQUE (definition_id, value) - Mỗi thuộc tính không trùng giá trị'
+}
+
 Table product_variants {
   id integer [pk]
   product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
   sku varchar(100) [unique, note: 'SKU riêng cho từng biến thể, ví dụ: AO-THUN-001-M-DO']
-  variant_type varchar(50) [not null, note: 'Loại biến thể: Size, Color, Material, Style...']
-  variant_value varchar(100) [not null, note: 'Giá trị: M, L, XL hoặc Đỏ, Xanh...']
+  variant_attributes jsonb [not null, default: '{}', note: 'Kết hợp các thuộc tính dạng JSON: {"Size": "M", "Color": "Đỏ", "Material": "Cotton"}']
   price_adjustment integer [default: 0, note: 'Điều chỉnh giá so với giá gốc (VND), +50000 = tăng 50k, -30000 = giảm 30k']
   stock_quantity integer [default: 0, note: 'Số lượng tồn kho của biến thể này']
   image_url varchar(500) [note: 'Ảnh riêng cho biến thể (ví dụ: màu khác nhau có ảnh khác nhau)']
@@ -104,12 +134,12 @@ Table product_variants {
   indexes {
     product_id [name: 'idx_product_variants_product']
     sku [name: 'idx_product_variants_sku']
-    variant_type [name: 'idx_product_variants_type']
+    variant_attributes [name: 'idx_product_variants_attributes', note: 'GIN index cho JSONB']
     (is_active, deleted_at) [name: 'idx_product_variants_active']
     (product_id, is_active) [name: 'idx_product_variants_product_active']
   }
   
-  Note: 'Constraint UNIQUE (product_id, variant_type, variant_value) - đảm bảo không trùng biến thể'
+  Note: 'Constraint UNIQUE (product_id, variant_attributes) - đảm bảo không trùng kết hợp thuộc tính. Hỗ trợ nhiều thuộc tính cùng lúc: Size + Color + Material...'
 }
 
 Table product_media {

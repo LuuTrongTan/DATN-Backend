@@ -306,7 +306,7 @@ export const getStockAlerts = async (req: AuthRequest, res: Response) => {
     let query = `
       SELECT sa.*, 
              p.name as product_name,
-             pv.variant_type, pv.variant_value
+             pv.variant_attributes
       FROM stock_alerts sa
       LEFT JOIN products p ON sa.product_id = p.id AND p.deleted_at IS NULL
       LEFT JOIN product_variants pv ON sa.variant_id = pv.id AND pv.deleted_at IS NULL

@@ -115,10 +115,11 @@ export const getCart = async (req: AuthRequest, res: Response) => {
         p.stock_quantity as product_stock,
         pm.image_url as product_image_url,
         pv.id as variant_db_id,
-        pv.variant_type,
-        pv.variant_value,
+        pv.sku as variant_sku,
+        pv.variant_attributes,
         pv.price_adjustment,
-        pv.stock_quantity as variant_stock
+        pv.stock_quantity as variant_stock,
+        pv.image_url as variant_image_url
        FROM cart_items ci
        JOIN products p ON ci.product_id = p.id AND p.deleted_at IS NULL AND p.is_active = TRUE
        LEFT JOIN LATERAL (
@@ -157,10 +158,11 @@ export const getCart = async (req: AuthRequest, res: Response) => {
         variant: item.variant_id ? {
           id: item.variant_db_id,
           product_id: item.product_id,
-          variant_type: item.variant_type,
-          variant_value: item.variant_value,
+          sku: item.variant_sku,
+          variant_attributes: item.variant_attributes,
           price_adjustment: parseFloat(item.price_adjustment || 0),
           stock_quantity: item.variant_stock,
+          image_url: item.variant_image_url,
         } : null,
         is_available: isAvailable,
         available_stock: availableStock,

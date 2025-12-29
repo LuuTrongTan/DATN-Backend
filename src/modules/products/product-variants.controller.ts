@@ -13,7 +13,7 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
 
     // Kiểm tra sản phẩm tồn tại
     const productCheck = await pool.query(
-      'SELECT id FROM products WHERE id = $1',
+      'SELECT id FROM products WHERE id = $1 AND deleted_at IS NULL',
       [product_id]
     );
 
@@ -21,11 +21,51 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
     }
 
-    // Kiểm tra variant đã tồn tại chưa (cùng product_id, variant_type, variant_value)
+    // Validate variant_attributes: kiểm tra các thuộc tính có trong định nghĩa không
+    const attributeNames = Object.keys(validated.variant_attributes);
+    if (attributeNames.length === 0) {
+      return ResponseHandler.badRequest(res, 'Phải có ít nhất một thuộc tính biến thể');
+    }
+
+    // Kiểm tra các thuộc tính có trong định nghĩa không
+    const definitionsCheck = await pool.query(
+      `SELECT attribute_name FROM variant_attribute_definitions 
+       WHERE product_id = $1 AND attribute_name = ANY($2::text[])`,
+      [product_id, attributeNames]
+    );
+
+    const definedAttributes = definitionsCheck.rows.map((r: any) => r.attribute_name);
+    const undefinedAttributes = attributeNames.filter((name) => !definedAttributes.includes(name));
+
+    if (undefinedAttributes.length > 0) {
+      return ResponseHandler.badRequest(
+        res,
+        `Các thuộc tính sau chưa được định nghĩa: ${undefinedAttributes.join(', ')}`
+      );
+    }
+
+    // Kiểm tra các giá trị có hợp lệ không
+    for (const [attrName, attrValue] of Object.entries(validated.variant_attributes)) {
+      const valueCheck = await pool.query(
+        `SELECT vav.id FROM variant_attribute_values vav
+         JOIN variant_attribute_definitions vad ON vav.definition_id = vad.id
+         WHERE vad.product_id = $1 AND vad.attribute_name = $2 AND vav.value = $3`,
+        [product_id, attrName, attrValue]
+      );
+
+      if (valueCheck.rows.length === 0) {
+        return ResponseHandler.badRequest(
+          res,
+          `Giá trị "${attrValue}" không hợp lệ cho thuộc tính "${attrName}"`
+        );
+      }
+    }
+
+    // Kiểm tra variant đã tồn tại chưa (cùng product_id và variant_attributes)
     const existingCheck = await pool.query(
       `SELECT id FROM product_variants 
-       WHERE product_id = $1 AND variant_type = $2 AND variant_value = $3`,
-      [product_id, validated.variant_type, validated.variant_value]
+       WHERE product_id = $1 AND variant_attributes = $2::jsonb`,
+      [product_id, JSON.stringify(validated.variant_attributes)]
     );
 
     if (existingCheck.rows.length > 0) {
@@ -36,15 +76,17 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO product_variants (product_id, variant_type, variant_value, price_adjustment, stock_quantity)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, product_id, variant_type, variant_value, price_adjustment, stock_quantity, created_at, updated_at`,
+      `INSERT INTO product_variants (product_id, sku, variant_attributes, price_adjustment, stock_quantity, image_url, is_active)
+       VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+       RETURNING id, product_id, sku, variant_attributes, price_adjustment, stock_quantity, image_url, is_active, created_at, updated_at`,
       [
         product_id,
-        validated.variant_type,
-        validated.variant_value,
+        validated.sku || null,
+        JSON.stringify(validated.variant_attributes),
         validated.price_adjustment || 0,
         validated.stock_quantity || 0,
+        validated.image_url || null,
+        validated.is_active !== false,
       ]
     );
 
@@ -68,11 +110,11 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
 export const getVariantsByProduct = async (req: AuthRequest, res: Response) => {
   const { product_id } = req.params;
   try {
-
     const result = await pool.query(
-      `SELECT id, product_id, variant_type, variant_value, price_adjustment, stock_quantity, created_at, updated_at FROM product_variants 
-       WHERE product_id = $1 
-       ORDER BY variant_type, variant_value`,
+      `SELECT id, product_id, sku, variant_attributes, price_adjustment, stock_quantity, image_url, is_active, created_at, updated_at 
+       FROM product_variants 
+       WHERE product_id = $1 AND deleted_at IS NULL
+       ORDER BY variant_attributes`,
       [product_id]
     );
 
@@ -90,9 +132,10 @@ export const getVariantsByProduct = async (req: AuthRequest, res: Response) => {
 export const getVariantById = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
   try {
-
     const result = await pool.query(
-      'SELECT id, product_id, variant_type, variant_value, price_adjustment, stock_quantity, created_at, updated_at FROM product_variants WHERE id = $1',
+      `SELECT id, product_id, sku, variant_attributes, price_adjustment, stock_quantity, image_url, is_active, created_at, updated_at 
+       FROM product_variants 
+       WHERE id = $1 AND deleted_at IS NULL`,
       [id]
     );
 
@@ -118,7 +161,7 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
 
     // Kiểm tra variant tồn tại
     const variantCheck = await pool.query(
-      'SELECT id, product_id FROM product_variants WHERE id = $1',
+      'SELECT id, product_id, variant_attributes FROM product_variants WHERE id = $1 AND deleted_at IS NULL',
       [id]
     );
 
@@ -127,21 +170,52 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
     }
 
     const productId = variantCheck.rows[0].product_id;
+    const currentAttributes = variantCheck.rows[0].variant_attributes;
 
-    // Nếu thay đổi variant_type hoặc variant_value, kiểm tra trùng lặp
-    if (validated.variant_type || validated.variant_value) {
-      const currentVariant = await pool.query(
-        'SELECT variant_type, variant_value FROM product_variants WHERE id = $1',
-        [id]
+    // Nếu thay đổi variant_attributes, kiểm tra trùng lặp và validate
+    if (validated.variant_attributes) {
+      const newAttributes = validated.variant_attributes;
+      const attributeNames = Object.keys(newAttributes);
+
+      // Validate các thuộc tính có trong định nghĩa không
+      const definitionsCheck = await pool.query(
+        `SELECT attribute_name FROM variant_attribute_definitions 
+         WHERE product_id = $1 AND attribute_name = ANY($2::text[])`,
+        [productId, attributeNames]
       );
 
-      const newType = validated.variant_type || currentVariant.rows[0].variant_type;
-      const newValue = validated.variant_value || currentVariant.rows[0].variant_value;
+      const definedAttributes = definitionsCheck.rows.map((r: any) => r.attribute_name);
+      const undefinedAttributes = attributeNames.filter((name) => !definedAttributes.includes(name));
 
+      if (undefinedAttributes.length > 0) {
+        return ResponseHandler.badRequest(
+          res,
+          `Các thuộc tính sau chưa được định nghĩa: ${undefinedAttributes.join(', ')}`
+        );
+      }
+
+      // Kiểm tra các giá trị có hợp lệ không
+      for (const [attrName, attrValue] of Object.entries(newAttributes)) {
+        const valueCheck = await pool.query(
+          `SELECT vav.id FROM variant_attribute_values vav
+           JOIN variant_attribute_definitions vad ON vav.definition_id = vad.id
+           WHERE vad.product_id = $1 AND vad.attribute_name = $2 AND vav.value = $3`,
+          [productId, attrName, attrValue]
+        );
+
+        if (valueCheck.rows.length === 0) {
+          return ResponseHandler.badRequest(
+            res,
+            `Giá trị "${attrValue}" không hợp lệ cho thuộc tính "${attrName}"`
+          );
+        }
+      }
+
+      // Kiểm tra trùng lặp
       const existingCheck = await pool.query(
         `SELECT id FROM product_variants 
-         WHERE product_id = $1 AND variant_type = $2 AND variant_value = $3 AND id != $4`,
-        [productId, newType, newValue, id]
+         WHERE product_id = $1 AND variant_attributes = $2::jsonb AND id != $3`,
+        [productId, JSON.stringify(newAttributes), id]
       );
 
       if (existingCheck.rows.length > 0) {
@@ -157,16 +231,16 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
     const values: any[] = [];
     let paramCount = 0;
 
-    if (validated.variant_type !== undefined) {
+    if (validated.sku !== undefined) {
       paramCount++;
-      updates.push(`variant_type = $${paramCount}`);
-      values.push(validated.variant_type);
+      updates.push(`sku = $${paramCount}`);
+      values.push(validated.sku);
     }
 
-    if (validated.variant_value !== undefined) {
+    if (validated.variant_attributes !== undefined) {
       paramCount++;
-      updates.push(`variant_value = $${paramCount}`);
-      values.push(validated.variant_value);
+      updates.push(`variant_attributes = $${paramCount}::jsonb`);
+      values.push(JSON.stringify(validated.variant_attributes));
     }
 
     if (validated.price_adjustment !== undefined) {
@@ -181,15 +255,31 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
       values.push(validated.stock_quantity);
     }
 
+    if (validated.image_url !== undefined) {
+      paramCount++;
+      updates.push(`image_url = $${paramCount}`);
+      values.push(validated.image_url);
+    }
+
+    if (validated.is_active !== undefined) {
+      paramCount++;
+      updates.push(`is_active = $${paramCount}`);
+      values.push(validated.is_active);
+    }
+
     if (updates.length === 0) {
       return ResponseHandler.badRequest(res, 'Không có trường nào để cập nhật');
     }
 
     paramCount++;
+    updates.push(`updated_at = NOW()`);
+    paramCount++;
     values.push(id);
 
     const result = await pool.query(
-      `UPDATE product_variants SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING id, product_id, variant_type, variant_value, price_adjustment, stock_quantity, created_at, updated_at`,
+      `UPDATE product_variants SET ${updates.join(', ')} 
+       WHERE id = $${paramCount} AND deleted_at IS NULL
+       RETURNING id, product_id, sku, variant_attributes, price_adjustment, stock_quantity, image_url, is_active, created_at, updated_at`,
       values
     );
 

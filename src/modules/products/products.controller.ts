@@ -223,10 +223,12 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
        END as is_in_wishlist,
        (SELECT json_agg(json_build_object(
          'id', pv.id,
-         'variant_type', pv.variant_type,
-         'variant_value', pv.variant_value,
+         'sku', pv.sku,
+         'variant_attributes', pv.variant_attributes,
          'price_adjustment', pv.price_adjustment,
-         'stock_quantity', pv.stock_quantity
+         'stock_quantity', pv.stock_quantity,
+         'image_url', pv.image_url,
+         'is_active', pv.is_active
        )) FROM product_variants pv WHERE pv.product_id = p.id AND pv.deleted_at IS NULL) as variants
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
@@ -444,6 +446,18 @@ export const deleteProduct = async (req: AuthRequest, res: Response) => {
       `UPDATE product_variants 
        SET deleted_at = NOW(), is_active = FALSE, updated_at = NOW()
        WHERE product_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+
+    // Soft delete toàn bộ định nghĩa thuộc tính liên quan
+    await pool.query(
+      `DELETE FROM variant_attribute_values 
+       WHERE definition_id IN (SELECT id FROM variant_attribute_definitions WHERE product_id = $1)`,
+      [id]
+    );
+    
+    await pool.query(
+      `DELETE FROM variant_attribute_definitions WHERE product_id = $1`,
       [id]
     );
 
