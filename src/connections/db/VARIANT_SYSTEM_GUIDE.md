@@ -132,4 +132,3 @@ ORDER BY variant_attributes;
 - Cần cập nhật tất cả code sử dụng `variant_type` và `variant_value`
 
 
-
