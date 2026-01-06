@@ -14,6 +14,12 @@ router.get('/order/:order_id', authenticate, shippingController.getShippingInfo)
 // Update shipping info (admin/staff)
 router.put('/order/:order_id', authenticate, requireRole('admin', 'staff'), shippingController.updateShippingInfo);
 
+// Create shipping order (admin/staff)
+router.post('/order', authenticate, requireRole('admin', 'staff'), shippingController.createOrder);
+
+// Track shipping order
+router.get('/track/:tracking_number', shippingController.trackOrder);
+
 export default router;
 
 

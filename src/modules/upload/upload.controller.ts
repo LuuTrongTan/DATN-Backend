@@ -36,12 +36,11 @@ export const uploadSingle = async (req: AuthRequest, res: Response) => {
 
     const { buffer, originalname, mimetype } = req.file;
     
-    // Upload file theo storage config (cloudflare, local, hoặc both)
+    // Upload file qua server (local storage)
     const uploadResult = await uploadFile(buffer, originalname, mimetype);
 
     return ResponseHandler.success(res, {
       url: uploadResult.url,
-      cloudflareUrl: uploadResult.cloudflareUrl,
       localUrl: uploadResult.localUrl,
       fileName: originalname,
       mimeType: mimetype,
@@ -91,12 +90,11 @@ export const uploadMultiple = async (req: AuthRequest, res: Response) => {
       mimeType: file.mimetype,
     }));
 
-    // Upload files theo storage config (cloudflare, local, hoặc both)
+    // Upload files qua server (local storage)
     const uploadResult = await uploadMultipleFiles(uploadData);
 
     return ResponseHandler.success(res, {
       urls: uploadResult.urls,
-      cloudflareUrls: uploadResult.cloudflareUrls,
       localUrls: uploadResult.localUrls,
       count: uploadResult.urls.length,
     }, 'Upload files thành công');

@@ -334,7 +334,7 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
       
       const videoFile = files.video_file[0];
       
-      // Upload theo config (cloudflare, local, hoặc both)
+      // Upload qua server (local storage)
       const uploadResult = await uploadFile(
         videoFile.buffer,
         videoFile.originalname,

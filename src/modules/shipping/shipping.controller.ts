@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
-import { calculateShippingFee, createShippingRecord } from './shipping.service';
+import { calculateShippingFee, createShippingRecord, createShippingOrder, trackShippingOrder } from './shipping.service';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 
@@ -10,15 +10,16 @@ export const calculateFee = async (req: AuthRequest, res: Response) => {
   const province = req.body.province;
   const district = req.body.district;
   try {
-    const { weight, value } = req.body;
+    const { weight, value, ward } = req.body;
 
     if (!province || !district) {
       return ResponseHandler.error(res, 'Tỉnh/thành phố và quận/huyện là bắt buộc', 400);
     }
 
-    const result = calculateShippingFee({
+    const result = await calculateShippingFee({
       province,
       district,
+      ward,
       weight: weight || 1, // Default 1kg
       value: value || 0,
     });
@@ -144,6 +145,129 @@ export const updateShippingInfo = async (req: AuthRequest, res: Response) => {
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi cập nhật thông tin vận chuyển', error);
+  }
+};
+
+// Create shipping order (admin/staff)
+export const createOrder = async (req: AuthRequest, res: Response) => {
+  try {
+    const {
+      order_id,
+      from_name,
+      from_phone,
+      from_address,
+      from_province,
+      from_district,
+      from_ward,
+      to_name,
+      to_phone,
+      to_address,
+      to_province,
+      to_district,
+      to_ward,
+      weight,
+      value,
+      cod,
+      note,
+    } = req.body;
+
+    // Validate required fields
+    if (!order_id || !to_name || !to_phone || !to_address || !to_province || !to_district) {
+      return ResponseHandler.error(res, 'Thiếu thông tin bắt buộc', 400);
+    }
+
+    // Get order info
+    const orderResult = await pool.query(
+      'SELECT id, order_number, total_amount FROM orders WHERE id = $1 AND deleted_at IS NULL',
+      [order_id]
+    );
+
+    if (orderResult.rows.length === 0) {
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
+    }
+
+    const order = orderResult.rows[0];
+
+    // Get shop info from environment or use defaults
+    const shopName = process.env.SHOP_NAME || 'Shop';
+    const shopPhone = process.env.SHOP_PHONE || '';
+    const shopAddress = process.env.SHOP_ADDRESS || '';
+    const shopProvince = process.env.SHOP_PROVINCE || 'Thành phố Hồ Chí Minh';
+    const shopDistrict = process.env.SHOP_DISTRICT || 'Quận 1';
+    const shopWard = process.env.SHOP_WARD || '';
+
+    // Create shipping order via Goship
+    const shippingResult = await createShippingOrder({
+      order_id: order.id,
+      order_number: order.order_number,
+      from_name: from_name || shopName,
+      from_phone: from_phone || shopPhone,
+      from_address: from_address || shopAddress,
+      from_province: from_province || shopProvince,
+      from_district: from_district || shopDistrict,
+      from_ward: from_ward || shopWard,
+      to_name: to_name,
+      to_phone: to_phone,
+      to_address: to_address,
+      to_province: to_province,
+      to_district: to_district,
+      to_ward: to_ward,
+      weight: weight || 1,
+      value: value || parseFloat(order.total_amount),
+      cod: cod,
+      note: note,
+    });
+
+    if (!shippingResult.success) {
+      return ResponseHandler.error(res, shippingResult.error || 'Không thể tạo đơn vận chuyển', 500);
+    }
+
+    // Save shipping record to database
+    const shippingId = await createShippingRecord(pool, {
+      order_id: order.id,
+      shipping_provider: 'Goship',
+      tracking_number: shippingResult.tracking_number,
+      shipping_fee: shippingResult.fee || 0,
+    });
+
+    return ResponseHandler.success(
+      res,
+      {
+        shipping_id: shippingId,
+        tracking_number: shippingResult.tracking_number,
+        fee: shippingResult.fee,
+      },
+      'Tạo đơn vận chuyển thành công'
+    );
+  } catch (error: any) {
+    logger.error('Error creating shipping order', error instanceof Error ? error : new Error(String(error)), {
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi tạo đơn vận chuyển', error);
+  }
+};
+
+// Track shipping order
+export const trackOrder = async (req: AuthRequest, res: Response) => {
+  try {
+    const { tracking_number } = req.params;
+
+    if (!tracking_number) {
+      return ResponseHandler.error(res, 'Mã vận đơn là bắt buộc', 400);
+    }
+
+    const trackingResult = await trackShippingOrder(tracking_number);
+
+    if (!trackingResult) {
+      return ResponseHandler.notFound(res, 'Không tìm thấy thông tin vận đơn');
+    }
+
+    return ResponseHandler.success(res, trackingResult, 'Lấy thông tin vận đơn thành công');
+  } catch (error: any) {
+    logger.error('Error tracking shipping order', error instanceof Error ? error : new Error(String(error)), {
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi tra cứu vận đơn', error);
   }
 };
 

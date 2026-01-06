@@ -1,85 +1,125 @@
 import { logger } from '../../utils/logging';
 import { ShippingStatus } from '../../connections/db/models/shipping.model';
-
-// Simplified shipping fee calculation
-// In production, this should integrate with shipping providers like GHTK, Vietnam Post, etc.
+import { 
+  calculateGoshipFee, 
+  createGoshipOrder,
+  trackGoshipOrder,
+  GoshipCalculateFeeRequest,
+  GoshipCreateOrderRequest,
+  GoshipTrackingResponse
+} from './goship.service';
 
 export interface ShippingFeeRequest {
   province: string;
   district: string;
+  ward?: string;
   weight: number; // in kg
   value: number; // order value in VND
+  from_province?: string; // Shop location province
+  from_district?: string; // Shop location district
+  from_ward?: string; // Shop location ward
 }
 
 export interface ShippingFeeResponse {
   fee: number;
   estimated_days: number;
   provider?: string;
+  service_type?: string;
 }
 
-// Calculate shipping fee based on province and weight
-export const calculateShippingFee = (request: ShippingFeeRequest): ShippingFeeResponse => {
-  // Simplified calculation
-  // In production, integrate with GHTK API or Vietnam Post API
-  
-  const baseFee = 30000; // Base fee 30k
-  const weightFee = request.weight * 5000; // 5k per kg
-  const distanceMultiplier = getDistanceMultiplier(request.province);
-  
-  const fee = Math.round((baseFee + weightFee) * distanceMultiplier);
-  
-  // Estimate delivery days
-  const estimatedDays = getEstimatedDays(request.province);
+/**
+ * Calculate shipping fee using Goship API
+ * Falls back to simple calculation if API is not configured
+ */
+export const calculateShippingFee = async (request: ShippingFeeRequest): Promise<ShippingFeeResponse> => {
+  // Get shop location from environment or use default
+  const shopProvince = request.from_province || process.env.SHOP_PROVINCE || 'Thành phố Hồ Chí Minh';
+  const shopDistrict = request.from_district || process.env.SHOP_DISTRICT || 'Quận 1';
+  const shopWard = request.from_ward || process.env.SHOP_WARD;
+
+  // Use Goship API
+  const goshipRequest: GoshipCalculateFeeRequest = {
+    from_province: shopProvince,
+    from_district: shopDistrict,
+    from_ward: shopWard,
+    to_province: request.province,
+    to_district: request.district,
+    to_ward: request.ward,
+    weight: request.weight,
+    value: request.value,
+    service_type: 'standard',
+  };
+
+  const result = await calculateGoshipFee(goshipRequest);
 
   logger.info('Shipping fee calculated', { 
     province: request.province, 
+    district: request.district,
     weight: request.weight, 
-    fee 
+    fee: result.fee,
+    provider: result.provider
   });
 
-  return {
-    fee,
-    estimated_days: estimatedDays,
-    provider: 'GHTK', // Default provider
-  };
+  return result;
 };
 
-// Get distance multiplier based on province
-function getDistanceMultiplier(province: string): number {
-  const provinceLower = province.toLowerCase();
-  
-  // HCM, Hanoi - same city
-  if (provinceLower.includes('hồ chí minh') || provinceLower.includes('hà nội')) {
-    return 1.0;
+/**
+ * Create shipping order using Goship API
+ */
+export const createShippingOrder = async (
+  request: {
+    order_id: number;
+    order_number: string;
+    from_name: string;
+    from_phone: string;
+    from_address: string;
+    from_province: string;
+    from_district: string;
+    from_ward?: string;
+    to_name: string;
+    to_phone: string;
+    to_address: string;
+    to_province: string;
+    to_district: string;
+    to_ward?: string;
+    weight: number;
+    value: number;
+    cod?: number;
+    note?: string;
   }
-  
-  // Nearby provinces
-  if (provinceLower.includes('đồng nai') || 
-      provinceLower.includes('bình dương') ||
-      provinceLower.includes('long an')) {
-    return 1.2;
-  }
-  
-  // Other provinces
-  return 1.5;
-}
+): Promise<{ success: boolean; tracking_number?: string; fee?: number; error?: string }> => {
+  const goshipRequest: GoshipCreateOrderRequest = {
+    order_id: request.order_id,
+    order_number: request.order_number,
+    from_name: request.from_name,
+    from_phone: request.from_phone,
+    from_address: request.from_address,
+    from_province: request.from_province,
+    from_district: request.from_district,
+    from_ward: request.from_ward,
+    to_name: request.to_name,
+    to_phone: request.to_phone,
+    to_address: request.to_address,
+    to_province: request.to_province,
+    to_district: request.to_district,
+    to_ward: request.to_ward,
+    weight: request.weight,
+    value: request.value,
+    cod: request.cod,
+    note: request.note,
+  };
 
-// Get estimated delivery days
-function getEstimatedDays(province: string): number {
-  const provinceLower = province.toLowerCase();
-  
-  if (provinceLower.includes('hồ chí minh') || provinceLower.includes('hà nội')) {
-    return 1;
-  }
-  
-  if (provinceLower.includes('đồng nai') || 
-      provinceLower.includes('bình dương') ||
-      provinceLower.includes('long an')) {
-    return 2;
-  }
-  
-  return 3;
-}
+  return await createGoshipOrder(goshipRequest);
+};
+
+/**
+ * Track shipping order
+ */
+export const trackShippingOrder = async (
+  trackingNumber: string
+): Promise<GoshipTrackingResponse | null> => {
+  return await trackGoshipOrder(trackingNumber);
+};
 
 // Create shipping record
 export interface CreateShippingRequest {
@@ -105,7 +145,7 @@ export const createShippingRecord = async (
      RETURNING id`,
     [
       request.order_id,
-      request.shipping_provider || 'GHTK',
+      request.shipping_provider || 'Goship',
       request.tracking_number || null,
       request.shipping_fee,
       estimatedDate,
