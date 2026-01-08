@@ -20,6 +20,24 @@ router.post('/order', authenticate, requireRole('admin', 'staff'), shippingContr
 // Track shipping order
 router.get('/track/:tracking_number', shippingController.trackOrder);
 
+// Get available services (Nhanh, Chuẩn, Tiết kiệm)
+router.get('/services', shippingController.getServices);
+
+// Calculate expected delivery time
+router.post('/leadtime', shippingController.calculateLeadtime);
+
+// Get stations (bưu cục)
+router.get('/stations', shippingController.getStations);
+
+// Cancel order (admin/staff)
+router.post('/cancel', authenticate, requireRole('admin', 'staff'), shippingController.cancelOrder);
+
+// Update COD (admin/staff)
+router.put('/cod', authenticate, requireRole('admin', 'staff'), shippingController.updateCOD);
+
+// Update order (admin/staff)
+router.put('/order-update', authenticate, requireRole('admin', 'staff'), shippingController.updateOrder);
+
 export default router;
 
 

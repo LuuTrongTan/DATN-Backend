@@ -212,7 +212,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
         await createShippingRecord(pool, {
           order_id: order.id,
           shipping_fee: shippingFee,
-          shipping_provider: 'GHTK',
+          shipping_provider: 'GHN',
         });
       } catch (error) {
         // Log error but don't fail order creation
@@ -390,10 +390,9 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
          p.id as product_id_full,
          p.name as product_name,
          p.price as product_price,
-         pv.id as variant_id_full,
-         pv.variant_type,
-         pv.variant_value,
-         pv.price_adjustment
+        pv.id as variant_id_full,
+        pv.variant_attributes,
+        pv.price_adjustment
        FROM order_items oi 
        JOIN products p ON oi.product_id = p.id
        LEFT JOIN product_variants pv ON oi.variant_id = pv.id
@@ -442,8 +441,9 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
           variant: item.variant_id_full
             ? {
                 id: item.variant_id_full,
-                variant_type: item.variant_type,
-                variant_value: item.variant_value,
+                variant_attributes: typeof item.variant_attributes === 'string' 
+                  ? JSON.parse(item.variant_attributes) 
+                  : item.variant_attributes || {},
                 price_adjustment: item.price_adjustment,
                 image_urls: variantImageUrls,
               }

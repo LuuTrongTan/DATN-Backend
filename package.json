@@ -11,6 +11,8 @@
     "migrate:up": "tsx src/connections/db/migrate.ts",
     "migrate:down": "tsx src/connections/db/migrate.ts rollback",
     "migrate:down:all": "tsx src/connections/db/migrate.ts rollback:all",
+    "migrate:reset": "tsx src/connections/db/migrate.ts reset",
+    "db:reset": "tsx src/connections/db/reset-database.ts",
     "drop": "tsx src/connections/db/migrate.ts rollback:all"
   },
   "keywords": [

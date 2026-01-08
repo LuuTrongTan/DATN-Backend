@@ -4,6 +4,21 @@ import { pool } from '../../connections';
 import { calculateShippingFee, createShippingRecord, createShippingOrder, trackShippingOrder } from './shipping.service';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
+import {
+  getGHNServices,
+  calculateGHNLeadtime,
+  getGHNStations,
+  cancelGHNOrder,
+  updateGHNCOD,
+  updateGHNOrder,
+  GHNGetServicesRequest,
+  GHNLeadtimeRequest,
+  GHNGetStationsRequest,
+  GHNCancelOrderRequest,
+  GHNUpdateCODRequest,
+  GHNUpdateOrderRequest,
+} from './ghn.service';
+import { getGHNDistricts } from '../provinces/ghn.service';
 
 // Calculate shipping fee
 export const calculateFee = async (req: AuthRequest, res: Response) => {
@@ -196,7 +211,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     const shopDistrict = process.env.SHOP_DISTRICT || 'Quận 1';
     const shopWard = process.env.SHOP_WARD || '';
 
-    // Create shipping order via Goship
+    // Create shipping order via GHN
     const shippingResult = await createShippingOrder({
       order_id: order.id,
       order_number: order.order_number,
@@ -225,7 +240,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     // Save shipping record to database
     const shippingId = await createShippingRecord(pool, {
       order_id: order.id,
-      shipping_provider: 'Goship',
+      shipping_provider: 'GHN',
       tracking_number: shippingResult.tracking_number,
       shipping_fee: shippingResult.fee || 0,
     });
@@ -268,6 +283,175 @@ export const trackOrder = async (req: AuthRequest, res: Response) => {
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi tra cứu vận đơn', error);
+  }
+};
+
+// Get available services (Nhanh, Chuẩn, Tiết kiệm)
+export const getServices = async (req: AuthRequest, res: Response) => {
+  try {
+    const { from_district, to_district } = req.query;
+
+    if (!from_district || !to_district) {
+      return ResponseHandler.error(res, 'from_district và to_district là bắt buộc', 400);
+    }
+
+    const shopId = parseInt(process.env.GHN_SHOP_ID || '0', 10);
+    if (!shopId) {
+      return ResponseHandler.error(res, 'GHN Shop ID chưa được cấu hình', 500);
+    }
+
+    const request: GHNGetServicesRequest = {
+      shop_id: shopId,
+      from_district: parseInt(String(from_district), 10),
+      to_district: parseInt(String(to_district), 10),
+    };
+
+    const services = await getGHNServices(request);
+
+    return ResponseHandler.success(res, services, 'Lấy danh sách dịch vụ thành công');
+  } catch (error: any) {
+    logger.error('Error getting services', error instanceof Error ? error : new Error(String(error)), {
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách dịch vụ', error);
+  }
+};
+
+// Calculate expected delivery time
+export const calculateLeadtime = async (req: AuthRequest, res: Response) => {
+  try {
+    const { from_district_id, from_ward_code, to_district_id, to_ward_code, service_id, service_type_id } = req.body;
+
+    if (!from_district_id || !from_ward_code || !to_district_id || !to_ward_code) {
+      return ResponseHandler.error(res, 'Thiếu thông tin bắt buộc', 400);
+    }
+
+    const request: GHNLeadtimeRequest = {
+      from_district_id: parseInt(String(from_district_id), 10),
+      from_ward_code: String(from_ward_code),
+      to_district_id: parseInt(String(to_district_id), 10),
+      to_ward_code: String(to_ward_code),
+      service_id: service_id ? parseInt(String(service_id), 10) : undefined,
+      service_type_id: service_type_id ? parseInt(String(service_type_id), 10) : undefined,
+    };
+
+    const result = await calculateGHNLeadtime(request);
+
+    return ResponseHandler.success(res, result, 'Tính thời gian giao hàng thành công');
+  } catch (error: any) {
+    logger.error('Error calculating leadtime', error instanceof Error ? error : new Error(String(error)), {
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi tính thời gian giao hàng', error);
+  }
+};
+
+// Get stations (bưu cục)
+export const getStations = async (req: AuthRequest, res: Response) => {
+  try {
+    const { district_id } = req.query;
+
+    const request: GHNGetStationsRequest = {
+      district_id: district_id ? parseInt(String(district_id), 10) : 0,
+    };
+
+    const stations = await getGHNStations(request);
+
+    return ResponseHandler.success(res, stations, 'Lấy danh sách bưu cục thành công');
+  } catch (error: any) {
+    logger.error('Error getting stations', error instanceof Error ? error : new Error(String(error)), {
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi lấy danh sách bưu cục', error);
+  }
+};
+
+// Cancel order (admin/staff)
+export const cancelOrder = async (req: AuthRequest, res: Response) => {
+  try {
+    const { order_codes } = req.body;
+
+    if (!order_codes || !Array.isArray(order_codes) || order_codes.length === 0) {
+      return ResponseHandler.error(res, 'order_codes là mảng bắt buộc', 400);
+    }
+
+    const request: GHNCancelOrderRequest = {
+      order_codes: order_codes.map(String),
+    };
+
+    const result = await cancelGHNOrder(request);
+
+    return ResponseHandler.success(res, result, 'Hủy đơn hàng thành công');
+  } catch (error: any) {
+    logger.error('Error canceling order', error instanceof Error ? error : new Error(String(error)), {
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi hủy đơn hàng', error);
+  }
+};
+
+// Update COD (admin/staff)
+export const updateCOD = async (req: AuthRequest, res: Response) => {
+  try {
+    const { order_code, cod_amount } = req.body;
+
+    if (!order_code || cod_amount === undefined) {
+      return ResponseHandler.error(res, 'order_code và cod_amount là bắt buộc', 400);
+    }
+
+    const request: GHNUpdateCODRequest = {
+      order_code: String(order_code),
+      cod_amount: parseFloat(String(cod_amount)),
+    };
+
+    const result = await updateGHNCOD(request);
+
+    if (!result.success) {
+      return ResponseHandler.error(res, result.message, 500);
+    }
+
+    return ResponseHandler.success(res, result, 'Cập nhật COD thành công');
+  } catch (error: any) {
+    logger.error('Error updating COD', error instanceof Error ? error : new Error(String(error)), {
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi cập nhật COD', error);
+  }
+};
+
+// Update order (admin/staff)
+export const updateOrder = async (req: AuthRequest, res: Response) => {
+  try {
+    const { order_code, to_name, to_phone, to_address, to_ward_code, to_district_id, to_province_id, note, required_note } = req.body;
+
+    if (!order_code) {
+      return ResponseHandler.error(res, 'order_code là bắt buộc', 400);
+    }
+
+    const request: GHNUpdateOrderRequest = {
+      order_code: String(order_code),
+      to_name,
+      to_phone,
+      to_address,
+      to_ward_code,
+      to_district_id: to_district_id ? parseInt(String(to_district_id), 10) : undefined,
+      to_province_id: to_province_id ? parseInt(String(to_province_id), 10) : undefined,
+      note,
+      required_note,
+    };
+
+    const result = await updateGHNOrder(request);
+
+    if (!result.success) {
+      return ResponseHandler.error(res, result.message, 500);
+    }
+
+    return ResponseHandler.success(res, result, 'Cập nhật đơn hàng thành công');
+  } catch (error: any) {
+    logger.error('Error updating order', error instanceof Error ? error : new Error(String(error)), {
+      ip: req.ip,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi khi cập nhật đơn hàng', error);
   }
 };
 

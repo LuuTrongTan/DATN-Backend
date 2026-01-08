@@ -15,6 +15,27 @@ cp env.example .env
 
 2. Điền thông tin vào file `.env`
 
+### GHN API Configuration
+
+Hệ thống sử dụng GHN (Giao Hàng Nhanh) API cho provinces và shipping. 
+
+**Cách lấy credentials:**
+1. Đăng ký tại: https://api.ghn.vn/
+2. Tạo cửa hàng trong GHN Dashboard
+3. Lấy Token và Shop ID
+
+**Cấu hình trong `.env`:**
+```env
+GHN_API_TOKEN=your_ghn_token_here
+GHN_SHOP_ID=your_shop_id_here
+GHN_API_URL=https://dev-online-gateway.ghn.vn/shiip/public-api/v2
+SHOP_PROVINCE=Thành phố Hồ Chí Minh
+SHOP_DISTRICT=Quận 1
+SHOP_WARD=Phường Bến Nghé
+```
+
+**Xem hướng dẫn test chi tiết:** [GHN_API_TESTING_GUIDE.md](./GHN_API_TESTING_GUIDE.md)
+
 ## Database Setup
 
 ### 1. Tạo database

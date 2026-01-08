@@ -2,8 +2,15 @@ import { pool } from './connection';
 import { migrations } from './migrations';
 import { logger } from '../../utils/logging';
 
+// Ensure public schema exists
+const ensurePublicSchema = async () => {
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS public`);
+  await pool.query(`SET search_path TO public`);
+};
+
 // Create migrations table if not exists
 const createMigrationsTable = async () => {
+  await ensurePublicSchema();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS migrations (
       id SERIAL PRIMARY KEY,
@@ -173,6 +180,26 @@ export const rollbackAll = async () => {
   }
 };
 
+// Reset migrations table (delete all migration records)
+export const resetMigrations = async () => {
+  try {
+    logger.info('Resetting migrations table...');
+    
+    await createMigrationsTable();
+    
+    // Delete all migration records
+    await pool.query('DELETE FROM migrations');
+    
+    logger.info('Migrations table reset successfully!');
+    logger.info('You can now run migrations again with: npm run migrate:up');
+  } catch (error: any) {
+    logger.error('Reset migrations error:', { error: error.message, stack: error.stack });
+    process.exit(1);
+  } finally {
+    await pool.end();
+  }
+};
+
 // Run if called directly
 if (require.main === module) {
   const command = process.argv[2];
@@ -181,6 +208,8 @@ if (require.main === module) {
     rollback();
   } else if (command === 'rollback:all') {
     rollbackAll();
+  } else if (command === 'reset') {
+    resetMigrations();
   } else {
     migrate();
   }

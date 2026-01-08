@@ -1,23 +1,24 @@
 import { logger } from '../../utils/logging';
 import { ShippingStatus } from '../../connections/db/models/shipping.model';
 import { 
-  calculateGoshipFee, 
-  createGoshipOrder,
-  trackGoshipOrder,
-  GoshipCalculateFeeRequest,
-  GoshipCreateOrderRequest,
-  GoshipTrackingResponse
-} from './goship.service';
+  calculateGHNFee, 
+  createGHNOrder,
+  trackGHNOrder,
+  GHNCalculateFeeRequest,
+  GHNCreateOrderRequest,
+  GHNTrackingResponse
+} from './ghn.service';
+import { getGHNProvinces, getGHNDistricts, getGHNWards } from '../provinces/ghn.service';
 
 export interface ShippingFeeRequest {
-  province: string;
-  district: string;
-  ward?: string;
-  weight: number; // in kg
+  province: string | number; // Province name or ID
+  district: string | number; // District name or ID
+  ward?: string; // Ward code or name
+  weight: number; // in kg (will be converted to gram for GHN)
   value: number; // order value in VND
-  from_province?: string; // Shop location province
-  from_district?: string; // Shop location district
-  from_ward?: string; // Shop location ward
+  from_province?: string | number; // Shop location province name or ID
+  from_district?: string | number; // Shop location district name or ID
+  from_ward?: string; // Shop location ward code or name
 }
 
 export interface ShippingFeeResponse {
@@ -28,43 +29,118 @@ export interface ShippingFeeResponse {
 }
 
 /**
- * Calculate shipping fee using Goship API
- * Falls back to simple calculation if API is not configured
+ * Helper function to lookup province/district/ward IDs from names
  */
-export const calculateShippingFee = async (request: ShippingFeeRequest): Promise<ShippingFeeResponse> => {
-  // Get shop location from environment or use default
-  const shopProvince = request.from_province || process.env.SHOP_PROVINCE || 'Thành phố Hồ Chí Minh';
-  const shopDistrict = request.from_district || process.env.SHOP_DISTRICT || 'Quận 1';
-  const shopWard = request.from_ward || process.env.SHOP_WARD;
+const lookupLocationIds = async (
+  province: string | number,
+  district: string | number,
+  ward?: string
+): Promise<{ provinceId: number; districtId: number; wardCode: string }> => {
+  // If already IDs, return them
+  if (typeof province === 'number' && typeof district === 'number') {
+    const wardCode = ward || '';
+    return { provinceId: province, districtId: district, wardCode };
+  }
 
-  // Use Goship API
-  const goshipRequest: GoshipCalculateFeeRequest = {
-    from_province: shopProvince,
-    from_district: shopDistrict,
-    from_ward: shopWard,
-    to_province: request.province,
-    to_district: request.district,
-    to_ward: request.ward,
-    weight: request.weight,
-    value: request.value,
-    service_type: 'standard',
-  };
+  // Lookup province ID
+  const provinces = await getGHNProvinces();
+  const provinceObj = provinces.find(p => 
+    p.ProvinceID === Number(province) || 
+    p.ProvinceName === province ||
+    p.Code === province
+  );
+  
+  if (!provinceObj) {
+    throw new Error(`Không tìm thấy tỉnh/thành phố: ${province}`);
+  }
 
-  const result = await calculateGoshipFee(goshipRequest);
+  const provinceId = provinceObj.ProvinceID;
 
-  logger.info('Shipping fee calculated', { 
-    province: request.province, 
-    district: request.district,
-    weight: request.weight, 
-    fee: result.fee,
-    provider: result.provider
-  });
+  // Lookup district ID
+  const districts = await getGHNDistricts(provinceId);
+  const districtObj = districts.find(d => 
+    d.DistrictID === Number(district) ||
+    d.DistrictName === district ||
+    d.Code === district
+  );
 
-  return result;
+  if (!districtObj) {
+    throw new Error(`Không tìm thấy quận/huyện: ${district}`);
+  }
+
+  const districtId = districtObj.DistrictID;
+
+  // Lookup ward code
+  let wardCode = ward || '';
+  if (ward && !ward.match(/^\d+$/)) {
+    // If ward is a name, lookup the code
+    const wards = await getGHNWards(districtId);
+    const wardObj = wards.find(w => 
+      w.WardCode === ward ||
+      w.WardName === ward
+    );
+    if (wardObj) {
+      wardCode = wardObj.WardCode;
+    }
+  }
+
+  return { provinceId, districtId, wardCode };
 };
 
 /**
- * Create shipping order using Goship API
+ * Calculate shipping fee using GHN API
+ * Falls back to simple calculation if API is not configured
+ */
+export const calculateShippingFee = async (request: ShippingFeeRequest): Promise<ShippingFeeResponse> => {
+  try {
+    // Get shop location from environment or use default
+    const shopProvince = request.from_province || process.env.SHOP_PROVINCE || 'Thành phố Hồ Chí Minh';
+    const shopDistrict = request.from_district || process.env.SHOP_DISTRICT || 'Quận 1';
+    const shopWard = request.from_ward || process.env.SHOP_WARD || '';
+
+    // Lookup location IDs
+    const fromLocation = await lookupLocationIds(shopProvince, shopDistrict, shopWard);
+    const toLocation = await lookupLocationIds(request.province, request.district, request.ward);
+
+    // Use GHN API
+    const ghnRequest: GHNCalculateFeeRequest = {
+      from_district_id: fromLocation.districtId,
+      from_ward_code: fromLocation.wardCode,
+      to_district_id: toLocation.districtId,
+      to_ward_code: toLocation.wardCode,
+      weight: request.weight * 1000, // Convert kg to gram
+      value: request.value,
+      service_type_id: 2, // Standard service
+    };
+
+    const result = await calculateGHNFee(ghnRequest);
+
+    logger.info('Shipping fee calculated', { 
+      province: request.province, 
+      district: request.district,
+      weight: request.weight, 
+      fee: result.fee,
+      provider: result.provider
+    });
+
+    return result;
+  } catch (error: any) {
+    logger.error('Error calculating shipping fee', {
+      error: error.message,
+      stack: error.stack,
+    });
+    // Return fallback fee
+    return {
+      fee: 30000,
+      estimated_days: 3,
+      provider: 'GHN (fallback)',
+      service_type: 'standard',
+    };
+  }
+};
+
+/**
+ * Create shipping order using GHN API
  */
 export const createShippingOrder = async (
   request: {
@@ -73,43 +149,82 @@ export const createShippingOrder = async (
     from_name: string;
     from_phone: string;
     from_address: string;
-    from_province: string;
-    from_district: string;
+    from_province: string | number;
+    from_district: string | number;
     from_ward?: string;
     to_name: string;
     to_phone: string;
     to_address: string;
-    to_province: string;
-    to_district: string;
+    to_province: string | number;
+    to_district: string | number;
     to_ward?: string;
-    weight: number;
+    weight: number; // in kg
     value: number;
     cod?: number;
     note?: string;
   }
 ): Promise<{ success: boolean; tracking_number?: string; fee?: number; error?: string }> => {
-  const goshipRequest: GoshipCreateOrderRequest = {
-    order_id: request.order_id,
-    order_number: request.order_number,
-    from_name: request.from_name,
-    from_phone: request.from_phone,
-    from_address: request.from_address,
-    from_province: request.from_province,
-    from_district: request.from_district,
-    from_ward: request.from_ward,
-    to_name: request.to_name,
-    to_phone: request.to_phone,
-    to_address: request.to_address,
-    to_province: request.to_province,
-    to_district: request.to_district,
-    to_ward: request.to_ward,
-    weight: request.weight,
-    value: request.value,
-    cod: request.cod,
-    note: request.note,
-  };
+  try {
+    // Lookup location IDs
+    const fromLocation = await lookupLocationIds(request.from_province, request.from_district, request.from_ward);
+    const toLocation = await lookupLocationIds(request.to_province, request.to_district, request.to_ward);
 
-  return await createGoshipOrder(goshipRequest);
+    // Get province ID for to_province
+    const provinces = await getGHNProvinces();
+    const toProvinceObj = provinces.find(p => 
+      p.ProvinceID === Number(request.to_province) || 
+      p.ProvinceName === request.to_province ||
+      p.Code === request.to_province
+    );
+    
+    if (!toProvinceObj) {
+      return {
+        success: false,
+        error: `Không tìm thấy tỉnh/thành phố đích: ${request.to_province}`,
+      };
+    }
+
+    const ghnRequest: GHNCreateOrderRequest = {
+      to_name: request.to_name,
+      to_phone: request.to_phone,
+      to_address: request.to_address,
+      to_ward_code: toLocation.wardCode,
+      to_district_id: toLocation.districtId,
+      to_province_id: toProvinceObj.ProvinceID,
+      client_order_code: request.order_number,
+      cod_amount: request.cod || 0,
+      content: request.note || `Đơn hàng #${request.order_number}`,
+      weight: request.weight * 1000, // Convert kg to gram
+      length: 20,
+      width: 20,
+      height: 20,
+      service_type_id: 2, // Standard service
+      payment_type_id: 2, // Buyer pay
+      note: request.note,
+      required_note: 'CHOTHUHANG', // Cho thu hàng
+    };
+
+    const result = await createGHNOrder(ghnRequest);
+
+    if (result.success) {
+      return {
+        success: true,
+        tracking_number: result.tracking_number,
+        fee: result.fee,
+      };
+    }
+
+    return result;
+  } catch (error: any) {
+    logger.error('Error creating shipping order', {
+      error: error.message,
+      stack: error.stack,
+    });
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
 };
 
 /**
@@ -117,8 +232,8 @@ export const createShippingOrder = async (
  */
 export const trackShippingOrder = async (
   trackingNumber: string
-): Promise<GoshipTrackingResponse | null> => {
-  return await trackGoshipOrder(trackingNumber);
+): Promise<GHNTrackingResponse | null> => {
+  return await trackGHNOrder(trackingNumber);
 };
 
 // Create shipping record
@@ -145,7 +260,7 @@ export const createShippingRecord = async (
      RETURNING id`,
     [
       request.order_id,
-      request.shipping_provider || 'Goship',
+      request.shipping_provider || 'GHN',
       request.tracking_number || null,
       request.shipping_fee,
       estimatedDate,

@@ -159,7 +159,9 @@ export const getCart = async (req: AuthRequest, res: Response) => {
           id: item.variant_db_id,
           product_id: item.product_id,
           sku: item.variant_sku,
-          variant_attributes: item.variant_attributes,
+          variant_attributes: typeof item.variant_attributes === 'string' 
+            ? JSON.parse(item.variant_attributes) 
+            : item.variant_attributes || {},
           price_adjustment: parseFloat(item.price_adjustment || 0),
           stock_quantity: item.variant_stock,
           image_url: item.variant_image_url,

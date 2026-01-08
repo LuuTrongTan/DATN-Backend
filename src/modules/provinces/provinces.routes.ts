@@ -3,6 +3,12 @@ import * as provincesController from './provinces.controller';
 
 const router = express.Router();
 
+// Clear cache (must be before other routes)
+// POST /api/provinces/cache/clear
+// DELETE /api/provinces/cache/clear
+router.post('/cache/clear', provincesController.clearCache);
+router.delete('/cache/clear', provincesController.clearCache);
+
 // Search provinces, districts, wards (must be first - exact match)
 // GET /api/provinces/search?q=keyword
 router.get('/search', provincesController.search);

@@ -428,13 +428,12 @@ export const getProductsAdmin = async (req: AuthRequest, res: Response) => {
               ORDER BY pm.display_order, pm.id
               LIMIT 1) AS video_url,
              -- Variants với images
-             (SELECT COALESCE(json_agg(variant_data ORDER BY variant_data->>'variant_type', variant_data->>'variant_value'), '[]'::json)
+             (SELECT COALESCE(json_agg(variant_data ORDER BY variant_data->'id'), '[]'::json)
               FROM (
                 SELECT json_build_object(
                   'id', pv.id,
                   'product_id', pv.product_id,
-                  'variant_type', pv.variant_type,
-                  'variant_value', pv.variant_value,
+                  'variant_attributes', pv.variant_attributes,
                   'price_adjustment', pv.price_adjustment,
                   'stock_quantity', pv.stock_quantity,
                   'created_at', pv.created_at,
@@ -446,7 +445,7 @@ export const getProductsAdmin = async (req: AuthRequest, res: Response) => {
                 ) as variant_data
                 FROM product_variants pv
                 WHERE pv.product_id = p.id AND pv.deleted_at IS NULL
-                ORDER BY pv.variant_type, pv.variant_value
+                ORDER BY pv.id
               ) subq
              ) AS variants
       FROM products p
