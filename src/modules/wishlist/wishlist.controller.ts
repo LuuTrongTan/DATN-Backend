@@ -21,13 +21,13 @@ export const getWishlist = async (req: AuthRequest, res: Response) => {
           FROM (
             SELECT DISTINCT ON (pm.image_url) pm.image_url, pm.display_order, pm.id
             FROM product_media pm
-            WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL
+            WHERE pm.product_id = p.id AND pm.type = 'image'
             ORDER BY pm.image_url, pm.display_order, pm.id
           ) pm) AS image_urls,
          -- Ảnh đầu tiên để backward compatibility
          (SELECT pm.image_url
           FROM product_media pm
-          WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL
+          WHERE pm.product_id = p.id AND pm.type = 'image'
           ORDER BY pm.is_primary DESC, pm.display_order, pm.id
           LIMIT 1) AS image_url
        FROM wishlist w

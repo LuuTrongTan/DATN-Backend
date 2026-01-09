@@ -22,10 +22,10 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
       // Mảng tất cả ảnh của sản phẩm chính (không phải variant) - DISTINCT để tránh duplicate
       "(SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[]) " +
       "FROM (SELECT DISTINCT ON (pm.image_url) pm.image_url, pm.display_order, pm.id " +
-      "FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL " +
+      "FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'image' " +
       "ORDER BY pm.image_url, pm.display_order, pm.id) pm) AS image_urls, " +
       // Video đầu tiên của sản phẩm chính (không phải variant)
-      "(SELECT pm.image_url FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL ORDER BY pm.display_order, pm.id LIMIT 1) AS video_url, " +
+      "(SELECT pm.image_url FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'video' ORDER BY pm.display_order, pm.id LIMIT 1) AS video_url, " +
       // Flag trong wishlist
       'CASE WHEN $1::uuid IS NULL THEN false ELSE EXISTS (SELECT 1 FROM wishlist w WHERE w.user_id = $1::uuid AND w.product_id = p.id) END as is_in_wishlist ';
 
@@ -176,13 +176,13 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
                FROM (
                  SELECT DISTINCT ON (pm.image_url) pm.image_url, pm.display_order, pm.id
                  FROM product_media pm
-                 WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL
+                 WHERE pm.product_id = p.id AND pm.type = 'image'
                  ORDER BY pm.image_url, pm.display_order, pm.id
                ) pm) AS image_urls,
               -- Video đầu tiên của sản phẩm chính (không phải variant)
               (SELECT pm.image_url
                FROM product_media pm
-               WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL
+               WHERE pm.product_id = p.id AND pm.type = 'video'
                ORDER BY pm.display_order, pm.id
                LIMIT 1) AS video_url,
               CASE WHEN $${userIdParamIndex}::uuid IS NULL THEN false
@@ -269,11 +269,11 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
        -- Tất cả ảnh của product (không phải variant images)
        (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
         FROM product_media pm
-        WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL) AS image_urls,
+        WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls,
        -- Video đầu tiên của product (không phải variant video)
        (SELECT pm.image_url
         FROM product_media pm
-        WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL
+        WHERE pm.product_id = p.id AND pm.type = 'video'
         ORDER BY pm.display_order, pm.id
         LIMIT 1) AS video_url,
        CASE WHEN $2::uuid IS NULL THEN false

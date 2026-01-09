@@ -66,7 +66,7 @@ const fetchWithCache = async <T>(
     // Cache the data
     cache.set(cacheKey, { data, timestamp: Date.now() });
     console.log('[GHN API] ✅ Fetched and cached data', { 
-      cacheKey,
+      cacheKey, 
       dataSize: JSON.stringify(data).length 
     });
 
@@ -289,11 +289,11 @@ export const getDistrictByCode = async (req: Request, res: Response) => {
       const district = ghnDistricts.find(d => d.DistrictID === districtCode);
       if (district) {
         const districtData = convertGHNDistrict(district);
-        const duration = Date.now() - startTime;
+    const duration = Date.now() - startTime;
         console.log('[GHN API] ✅ GET /api/provinces/districts/:code - Response thành công', {
-          duration: `${duration}ms`,
-          districtCode,
-        });
+      duration: `${duration}ms`,
+      districtCode,
+    });
         return ResponseHandler.success(res, districtData, 'Lấy thông tin quận/huyện thành công');
       }
     }
@@ -399,7 +399,7 @@ export const getWardByCode = async (req: Request, res: Response) => {
         const ghnWards = await fetchWithCache(`ghn_wards_${district.DistrictID}`, () => 
           getGHNWards(district.DistrictID)
         );
-        
+    
         const ward = ghnWards.find(w => 
           w.WardCode === wardCode || 
           w.WardCode === String(wardCode) ||
@@ -408,11 +408,11 @@ export const getWardByCode = async (req: Request, res: Response) => {
         
         if (ward) {
           const wardData = convertGHNWard(ward);
-          const duration = Date.now() - startTime;
+    const duration = Date.now() - startTime;
           console.log('[GHN API] ✅ GET /api/provinces/wards/:code - Response thành công', {
-            duration: `${duration}ms`,
-            wardCode,
-          });
+      duration: `${duration}ms`,
+      wardCode,
+    });
           return ResponseHandler.success(res, wardData, 'Lấy thông tin phường/xã thành công');
         }
       }

@@ -413,18 +413,18 @@ export const getProductsAdmin = async (req: AuthRequest, res: Response) => {
     idx++;
     params.push(finalLimit);
 
-    const query = `
+      const query = `
       ${cte}
       SELECT p.*,
              c.name as category_name,
              -- Tất cả ảnh từ product_media (chỉ product images, không phải variant images)
              (SELECT COALESCE(array_agg(pm.image_url ORDER BY pm.display_order, pm.id), ARRAY[]::text[])
               FROM product_media pm
-              WHERE pm.product_id = p.id AND pm.type = 'image' AND pm.variant_id IS NULL) AS image_urls,
+              WHERE pm.product_id = p.id AND pm.type = 'image') AS image_urls,
              -- Video đầu tiên
              (SELECT pm.image_url
               FROM product_media pm
-              WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL
+              WHERE pm.product_id = p.id AND pm.type = 'video'
               ORDER BY pm.display_order, pm.id
               LIMIT 1) AS video_url,
              -- Variants với images
@@ -437,11 +437,7 @@ export const getProductsAdmin = async (req: AuthRequest, res: Response) => {
                   'price_adjustment', pv.price_adjustment,
                   'stock_quantity', pv.stock_quantity,
                   'created_at', pv.created_at,
-                  'image_urls', (
-                    SELECT COALESCE(array_agg(pm2.image_url ORDER BY pm2.display_order, pm2.id), ARRAY[]::text[])
-                    FROM product_media pm2
-                    WHERE pm2.variant_id = pv.id AND pm2.type = 'image'
-                  )
+                  'image_url', pv.image_url
                 ) as variant_data
                 FROM product_variants pv
                 WHERE pv.product_id = p.id AND pv.deleted_at IS NULL

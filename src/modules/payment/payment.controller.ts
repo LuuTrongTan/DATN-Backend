@@ -191,14 +191,16 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
 
         }
 
-        // Cập nhật trạng thái thanh toán
+        // Cập nhật trạng thái thanh toán khi thất bại:
+        // - payment_status: FAILED
+        // - Nếu đơn đang PENDING thì chuyển sang CANCELLED, ngược lại giữ nguyên order_status
         await client.query(
           `UPDATE orders 
            SET payment_status = $1, 
                order_status = CASE WHEN order_status = $2 THEN $3 ELSE order_status END,
                updated_at = NOW()
            WHERE id = $4`,
-          [PAYMENT_STATUS.FAILED, ORDER_STATUS.PENDING, ORDER_STATUS.CANCELLED || ORDER_STATUS.PENDING, lockedOrder.id]
+          [PAYMENT_STATUS.FAILED, ORDER_STATUS.PENDING, ORDER_STATUS.CANCELLED, lockedOrder.id]
         );
 
         await client.query('COMMIT');
@@ -206,7 +208,7 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
         logger.warn('Payment failed', { orderNumber: verification.orderNumber, responseCode: verification.responseCode });
       }
     } catch (err) {
-      await pool.query('ROLLBACK');
+      await client.query('ROLLBACK');
       throw err;
     } finally {
       // @ts-ignore

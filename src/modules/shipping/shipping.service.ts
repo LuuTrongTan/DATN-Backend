@@ -93,9 +93,9 @@ const lookupLocationIds = async (
  */
 export const calculateShippingFee = async (request: ShippingFeeRequest): Promise<ShippingFeeResponse> => {
   try {
-    // Get shop location from environment or use default
-    const shopProvince = request.from_province || process.env.SHOP_PROVINCE || 'Thành phố Hồ Chí Minh';
-    const shopDistrict = request.from_district || process.env.SHOP_DISTRICT || 'Quận 1';
+  // Get shop location from environment or use default
+  const shopProvince = request.from_province || process.env.SHOP_PROVINCE || 'Thành phố Hồ Chí Minh';
+  const shopDistrict = request.from_district || process.env.SHOP_DISTRICT || 'Quận 1';
     const shopWard = request.from_ward || process.env.SHOP_WARD || '';
 
     // Lookup location IDs
@@ -109,21 +109,21 @@ export const calculateShippingFee = async (request: ShippingFeeRequest): Promise
       to_district_id: toLocation.districtId,
       to_ward_code: toLocation.wardCode,
       weight: request.weight * 1000, // Convert kg to gram
-      value: request.value,
+    value: request.value,
       service_type_id: 2, // Standard service
-    };
+  };
 
     const result = await calculateGHNFee(ghnRequest);
 
-    logger.info('Shipping fee calculated', { 
-      province: request.province, 
-      district: request.district,
-      weight: request.weight, 
-      fee: result.fee,
-      provider: result.provider
-    });
+  logger.info('Shipping fee calculated', { 
+    province: request.province, 
+    district: request.district,
+    weight: request.weight, 
+    fee: result.fee,
+    provider: result.provider
+  });
 
-    return result;
+  return result;
   } catch (error: any) {
     logger.error('Error calculating shipping fee', {
       error: error.message,
@@ -185,9 +185,9 @@ export const createShippingOrder = async (
     }
 
     const ghnRequest: GHNCreateOrderRequest = {
-      to_name: request.to_name,
-      to_phone: request.to_phone,
-      to_address: request.to_address,
+    to_name: request.to_name,
+    to_phone: request.to_phone,
+    to_address: request.to_address,
       to_ward_code: toLocation.wardCode,
       to_district_id: toLocation.districtId,
       to_province_id: toProvinceObj.ProvinceID,
@@ -200,9 +200,9 @@ export const createShippingOrder = async (
       height: 20,
       service_type_id: 2, // Standard service
       payment_type_id: 2, // Buyer pay
-      note: request.note,
+    note: request.note,
       required_note: 'CHOTHUHANG', // Cho thu hàng
-    };
+  };
 
     const result = await createGHNOrder(ghnRequest);
 
