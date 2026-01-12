@@ -5,6 +5,7 @@ import { productSchema } from './products.validation';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 import { uploadFile, uploadMultipleFiles } from '../upload/storage.service';
+import { syncProductTags, ensureTagExists } from './product-tags.controller';
 
 // UC-07: Tìm kiếm và lọc sản phẩm
 export const searchProducts = async (req: AuthRequest, res: Response) => {
@@ -26,6 +27,10 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
       "ORDER BY pm.image_url, pm.display_order, pm.id) pm) AS image_urls, " +
       // Video đầu tiên của sản phẩm chính (không phải variant)
       "(SELECT pm.image_url FROM product_media pm WHERE pm.product_id = p.id AND pm.type = 'video' ORDER BY pm.display_order, pm.id LIMIT 1) AS video_url, " +
+      // Tags của sản phẩm
+      "(SELECT json_agg(json_build_object('id', pt.id, 'name', pt.name, 'slug', pt.slug)) " +
+      "FROM product_tags pt INNER JOIN product_tag_relations ptr ON pt.id = ptr.tag_id " +
+      "WHERE ptr.product_id = p.id) AS tags, " +
       // Flag trong wishlist
       'CASE WHEN $1::uuid IS NULL THEN false ELSE EXISTS (SELECT 1 FROM wishlist w WHERE w.user_id = $1::uuid AND w.product_id = p.id) END as is_in_wishlist ';
 
@@ -74,6 +79,22 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
       paramCount++;
       query += ` AND p.price <= $${paramCount}`;
       params.push(max_price);
+    }
+
+    // Filter by tags
+    if (req.query.tag_ids) {
+      const tagIds = Array.isArray(req.query.tag_ids) 
+        ? req.query.tag_ids.map(id => parseInt(id as string))
+        : [parseInt(req.query.tag_ids as string)];
+      
+      if (tagIds.length > 0) {
+        paramCount++;
+        query += ` AND EXISTS (
+          SELECT 1 FROM product_tag_relations ptr 
+          WHERE ptr.product_id = p.id AND ptr.tag_id = ANY($${paramCount}::int[])
+        )`;
+        params.push(tagIds);
+      }
     }
 
     // Count total
@@ -283,6 +304,13 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
             )
        END as is_in_wishlist,
        (SELECT json_agg(json_build_object(
+         'id', pt.id,
+         'name', pt.name,
+         'slug', pt.slug
+       )) FROM product_tags pt
+        INNER JOIN product_tag_relations ptr ON pt.id = ptr.tag_id
+        WHERE ptr.product_id = p.id) as tags,
+       (SELECT json_agg(json_build_object(
          'id', pv.id,
          'sku', pv.sku,
          'variant_attributes', pv.variant_attributes,
@@ -434,7 +462,24 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
       );
     }
 
-    // Lấy lại product với images và video
+    // Xử lý tags nếu có
+    if (body.tag_ids && Array.isArray(body.tag_ids) && body.tag_ids.length > 0) {
+      await syncProductTags(product.id, body.tag_ids);
+    } else if (body.tag_names && Array.isArray(body.tag_names) && body.tag_names.length > 0) {
+      // Nếu gửi tag_names thay vì tag_ids, tạo tags mới hoặc lấy tags đã có
+      const tagIds: number[] = [];
+      for (const tagName of body.tag_names) {
+        if (typeof tagName === 'string' && tagName.trim()) {
+          const tagId = await ensureTagExists(tagName.trim());
+          tagIds.push(tagId);
+        }
+      }
+      if (tagIds.length > 0) {
+        await syncProductTags(product.id, tagIds);
+      }
+    }
+
+    // Lấy lại product với images, video và tags
     const finalResult = await pool.query(
       `SELECT p.*,
               c.name as category_name,
@@ -445,7 +490,11 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
                FROM product_media pm
                WHERE pm.product_id = p.id AND pm.type = 'video'
                ORDER BY pm.display_order, pm.id
-               LIMIT 1) AS video_url
+               LIMIT 1) AS video_url,
+              (SELECT json_agg(json_build_object('id', pt.id, 'name', pt.name, 'slug', pt.slug))
+               FROM product_tags pt
+               INNER JOIN product_tag_relations ptr ON pt.id = ptr.tag_id
+               WHERE ptr.product_id = p.id) AS tags
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
        WHERE p.id = $1`,
@@ -585,6 +634,26 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
         [id]
       );
 
+    // Xử lý tags nếu có
+    if (updates.tag_ids !== undefined) {
+      if (Array.isArray(updates.tag_ids) && updates.tag_ids.length > 0) {
+        await syncProductTags(Number(id), updates.tag_ids);
+      } else {
+        // Xóa tất cả tags nếu tag_ids là mảng rỗng
+        await syncProductTags(Number(id), []);
+      }
+    } else if (updates.tag_names !== undefined && Array.isArray(updates.tag_names) && updates.tag_names.length > 0) {
+      // Nếu gửi tag_names thay vì tag_ids, tạo tags mới hoặc lấy tags đã có
+      const tagIds: number[] = [];
+      for (const tagName of updates.tag_names) {
+        if (typeof tagName === 'string' && tagName.trim()) {
+          const tagId = await ensureTagExists(tagName.trim());
+          tagIds.push(tagId);
+        }
+      }
+      await syncProductTags(Number(id), tagIds);
+    }
+
       // Thêm video mới nếu có
       if (updates.video_url) {
         await pool.query(
@@ -595,7 +664,7 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // Lấy lại product với images và video
+    // Lấy lại product với images, video và tags
     const finalResult = await pool.query(
       `SELECT p.*,
               c.name as category_name,
@@ -606,7 +675,11 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
                FROM product_media pm
                WHERE pm.product_id = p.id AND pm.type = 'video' AND pm.variant_id IS NULL
                ORDER BY pm.display_order, pm.id
-               LIMIT 1) AS video_url
+               LIMIT 1) AS video_url,
+              (SELECT json_agg(json_build_object('id', pt.id, 'name', pt.name, 'slug', pt.slug))
+               FROM product_tags pt
+               INNER JOIN product_tag_relations ptr ON pt.id = ptr.tag_id
+               WHERE ptr.product_id = p.id) AS tags
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
       WHERE p.id = $1`,
@@ -651,18 +724,6 @@ export const deleteProduct = async (req: AuthRequest, res: Response) => {
       `UPDATE product_variants 
        SET deleted_at = NOW(), is_active = FALSE, updated_at = NOW()
        WHERE product_id = $1 AND deleted_at IS NULL`,
-      [id]
-    );
-
-    // Soft delete toàn bộ định nghĩa thuộc tính liên quan
-    await pool.query(
-      `DELETE FROM variant_attribute_values 
-       WHERE definition_id IN (SELECT id FROM variant_attribute_definitions WHERE product_id = $1)`,
-      [id]
-    );
-    
-    await pool.query(
-      `DELETE FROM variant_attribute_definitions WHERE product_id = $1`,
       [id]
     );
 

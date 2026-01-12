@@ -3,6 +3,34 @@ import { appConfig } from '../connections/config/app.config';
 import { logger } from '../utils/logging';
 import { ResponseHandler } from '../utils/response';
 
+const SENSITIVE_KEYS = [
+  'password',
+  'new_password',
+  'confirm_password',
+  'token',
+  'refreshToken',
+  'access_token',
+  'code',
+  'otp',
+];
+
+const maskSensitive = (value: any): any => {
+  if (Array.isArray(value)) {
+    return value.map(maskSensitive);
+  }
+  if (value && typeof value === 'object') {
+    return Object.keys(value).reduce((acc: any, key) => {
+      if (SENSITIVE_KEYS.includes(key)) {
+        acc[key] = '***';
+      } else {
+        acc[key] = maskSensitive(value[key]);
+      }
+      return acc;
+    }, Array.isArray(value) ? [] : {});
+  }
+  return value;
+};
+
 export const errorHandler = (
   err: any,
   req: Request,
@@ -17,9 +45,9 @@ export const errorHandler = (
     method: req.method,
     ip: req.ip,
     userAgent: req.get('user-agent'),
-    body: req.body,
-    params: req.params,
-    query: req.query,
+    body: maskSensitive(req.body),
+    params: maskSensitive(req.params),
+    query: maskSensitive(req.query),
   });
 
   // Zod validation errors

@@ -17,8 +17,15 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
 
     // Get cart items (only active products)
     const cartItems = await pool.query(
-      `SELECT ci.*, p.price, p.stock_quantity as product_stock,
-       pv.price_adjustment, pv.stock_quantity as variant_stock
+      `SELECT ci.*,
+       p.price,
+       p.name as product_name,
+       p.sku as product_sku,
+       p.stock_quantity as product_stock,
+       pv.price_adjustment,
+       pv.stock_quantity as variant_stock,
+       pv.sku as variant_sku,
+       pv.variant_attributes
        FROM cart_items ci
        JOIN products p ON ci.product_id = p.id AND p.deleted_at IS NULL AND p.is_active = TRUE
        LEFT JOIN product_variants pv ON ci.variant_id = pv.id AND pv.deleted_at IS NULL AND pv.is_active = TRUE
@@ -106,7 +113,11 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
 
       orderItems.push({
         product_id: item.product_id,
+        product_name: item.product_name,
+        product_sku: item.product_sku,
         variant_id: item.variant_id,
+        variant_sku: item.variant_sku,
+        variant_attributes_snapshot: item.variant_attributes,
         quantity: item.quantity,
         price: itemPrice,
       });
@@ -158,9 +169,29 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       // Create order items and update stock
       for (const item of orderItems) {
         await client.query(
-          `INSERT INTO order_items (order_id, product_id, variant_id, quantity, price)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [order.id, item.product_id, item.variant_id, item.quantity, item.price]
+          `INSERT INTO order_items (
+             order_id,
+             product_id,
+             product_name,
+             product_sku,
+             variant_id,
+             variant_sku,
+             variant_attributes_snapshot,
+             quantity,
+             price
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)`,
+          [
+            order.id,
+            item.product_id,
+            item.product_name,
+            item.product_sku,
+            item.variant_id,
+            item.variant_sku,
+            item.variant_attributes_snapshot ? JSON.stringify(item.variant_attributes_snapshot) : null,
+            item.quantity,
+            item.price,
+          ]
         );
 
         // Get current stock before update (check soft delete)
@@ -379,6 +410,17 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
 
     const order = orderResult.rows[0];
 
+    // Lấy thông tin vận chuyển (nếu có)
+    const shippingResult = await pool.query(
+      `SELECT shipping_provider, tracking_number, shipping_fee
+       FROM shipping
+       WHERE order_id = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [id]
+    );
+    const shipping = shippingResult.rows[0];
+
     // Lấy order items với product và variant info
     const itemsResult = await pool.query(
       `SELECT 
@@ -452,10 +494,33 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       })
     );
 
+    // Lấy refunds của order
+    const refundsResult = await pool.query(
+      `SELECT r.*,
+       (SELECT json_agg(json_build_object(
+         'id', ri.id,
+         'order_item_id', ri.order_item_id,
+         'quantity', ri.quantity,
+         'refund_amount', ri.refund_amount,
+         'reason', ri.reason
+       )) FROM refund_items ri WHERE ri.refund_id = r.id) as items
+       FROM refunds r
+       WHERE r.order_id = $1 AND r.deleted_at IS NULL
+       ORDER BY r.created_at DESC`,
+      [id]
+    );
+
     // Kết hợp tất cả
     const orderWithDetails = {
       ...order,
+      ...(shipping && {
+        shipping_provider: shipping.shipping_provider,
+        tracking_number: shipping.tracking_number,
+        // Ưu tiên shipping_fee từ bảng shipping nếu có
+        shipping_fee: shipping.shipping_fee ?? order.shipping_fee,
+      }),
       items,
+      refunds: refundsResult.rows || [],
     };
 
     logger.info('Order fetched successfully', { orderId: id, itemsCount: items.length });

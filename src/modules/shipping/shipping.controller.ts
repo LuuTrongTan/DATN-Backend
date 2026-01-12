@@ -1,4 +1,4 @@
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { calculateShippingFee, createShippingRecord, createShippingOrder, trackShippingOrder } from './shipping.service';
@@ -19,6 +19,7 @@ import {
   GHNUpdateOrderRequest,
 } from './ghn.service';
 import { getGHNDistricts } from '../provinces/ghn.service';
+import { ORDER_STATUS } from '../../constants';
 
 // Calculate shipping fee
 export const calculateFee = async (req: AuthRequest, res: Response) => {
@@ -452,6 +453,87 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi cập nhật đơn hàng', error);
+  }
+};
+
+// GHN webhook callback: cập nhật trạng thái giao hàng
+export const ghnWebhook = async (req: Request, res: Response) => {
+  const secret = process.env.GHN_WEBHOOK_TOKEN;
+  const incomingToken =
+    (req.headers['x-ghn-token'] as string) ||
+    (req.headers['x-gn-token'] as string) ||
+    (req.headers['token'] as string) ||
+    (req.body && req.body.token);
+
+  if (secret && secret !== incomingToken) {
+    return ResponseHandler.unauthorized(res, 'Chữ ký webhook không hợp lệ');
+  }
+
+  const { client_order_code, order_code, status, reason } = req.body || {};
+
+  if (!client_order_code && !order_code) {
+    return ResponseHandler.badRequest(res, 'Thiếu mã đơn hàng');
+  }
+
+  try {
+    const orderResult = await pool.query(
+      'SELECT id FROM orders WHERE order_number = $1',
+      [client_order_code || order_code]
+    );
+
+    if (orderResult.rows.length === 0) {
+      logger.warn('[GHN Webhook] Không tìm thấy đơn hàng', {
+        client_order_code,
+        order_code,
+        status,
+      });
+      return ResponseHandler.notFound(res, 'Đơn hàng không tồn tại');
+    }
+
+    const orderId = orderResult.rows[0].id;
+
+    await pool.query(
+      `UPDATE shipping
+       SET status = COALESCE($1, status),
+           tracking_number = COALESCE(tracking_number, $2),
+           updated_at = NOW()
+       WHERE order_id = $3`,
+      [status || null, order_code || null, orderId]
+    );
+
+    // Cập nhật trạng thái đơn hàng nếu GHN báo đã giao hoặc hủy
+    if (status) {
+      const normalized = String(status).toLowerCase();
+      if (normalized.includes('delivered')) {
+        await pool.query(
+          `UPDATE orders SET order_status = $1, updated_at = NOW() WHERE id = $2`,
+          [ORDER_STATUS.DELIVERED, orderId]
+        );
+      } else if (normalized.includes('cancel')) {
+        await pool.query(
+          `UPDATE orders SET order_status = $1, updated_at = NOW() WHERE id = $2`,
+          [ORDER_STATUS.CANCELLED, orderId]
+        );
+      }
+    }
+
+    logger.info('[GHN Webhook] Đã cập nhật trạng thái đơn hàng', {
+      orderId,
+      client_order_code,
+      order_code,
+      status,
+      reason,
+    });
+
+    return ResponseHandler.success(res, { order_id: orderId }, 'OK');
+  } catch (error: any) {
+    logger.error('Error handling GHN webhook', error instanceof Error ? error : new Error(String(error)), {
+      client_order_code,
+      order_code,
+      status,
+      reason,
+    });
+    return ResponseHandler.internalError(res, 'Lỗi xử lý webhook GHN', error);
   }
 };
 

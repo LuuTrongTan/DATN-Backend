@@ -1,11 +1,19 @@
 import express from 'express';
 import * as productsController from './products.controller';
 import * as variantsController from './product-variants.controller';
-import * as attributesController from './variant-attributes.controller';
+import * as tagsController from './product-tags.controller';
 import { authenticate, optionalAuthenticate, requireRole } from '../../middlewares/auth.middleware';
 import { productCreateMiddleware } from './products.upload';
 
 const router = express.Router();
+
+// Tags routes (phải đặt trước /:id để tránh conflict)
+router.get('/tags', optionalAuthenticate, tagsController.getAllTags);
+router.get('/tags/:id', optionalAuthenticate, tagsController.getTagById);
+router.get('/tags/:id/products', optionalAuthenticate, tagsController.getProductsByTag);
+router.post('/tags', authenticate, requireRole('staff', 'admin'), tagsController.createTag);
+router.put('/tags/:id', authenticate, requireRole('staff', 'admin'), tagsController.updateTag);
+router.delete('/tags/:id', authenticate, requireRole('staff', 'admin'), tagsController.deleteTag);
 
 // UC-07: Tìm kiếm và lọc sản phẩm (public, nhưng có thể kèm user để biết wishlist)
 router.get('/search', optionalAuthenticate, productsController.searchProducts);
@@ -24,15 +32,6 @@ router.post(
 );
 router.put('/:id', authenticate, requireRole('staff', 'admin'), productsController.updateProduct);
 router.delete('/:id', authenticate, requireRole('staff', 'admin'), productsController.deleteProduct);
-
-// Variant Attributes routes (định nghĩa thuộc tính và giá trị)
-router.get('/variant-attributes/all', optionalAuthenticate, attributesController.getAllAttributeDefinitions); // Lấy tất cả thuộc tính (để dùng lại)
-router.get('/:product_id/variant-attributes', optionalAuthenticate, attributesController.getAttributeDefinitionsByProduct);
-router.post('/:product_id/variant-attributes', authenticate, requireRole('staff', 'admin'), attributesController.createAttributeDefinition);
-router.post('/:product_id/variant-attributes/copy', authenticate, requireRole('staff', 'admin'), attributesController.copyAttributesFromProduct); // Copy từ sản phẩm khác
-router.delete('/variant-attributes/:id', authenticate, requireRole('staff', 'admin'), attributesController.deleteAttributeDefinition);
-router.post('/variant-attributes/:definition_id/values', authenticate, requireRole('staff', 'admin'), attributesController.createAttributeValue);
-router.delete('/variant-attributes/values/:id', authenticate, requireRole('staff', 'admin'), attributesController.deleteAttributeValue);
 
 // Variants routes
 router.get('/:product_id/variants', optionalAuthenticate, variantsController.getVariantsByProduct);

@@ -130,37 +130,6 @@ Table products {
   }
 }
 
-Table variant_attribute_definitions {
-  id integer [pk]
-  product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
-  attribute_name varchar(50) [not null, note: 'Tên thuộc tính: Size, Color, Material, Style...']
-  display_name varchar(100) [not null, note: 'Tên hiển thị: Kích cỡ, Màu sắc, Chất liệu...']
-  display_order integer [default: 0, note: 'Thứ tự hiển thị']
-  is_required boolean [default: false, note: 'Bắt buộc phải có thuộc tính này']
-  created_at timestamp
-  
-  indexes {
-    product_id [name: 'idx_variant_attr_def_product']
-    attribute_name [name: 'idx_variant_attr_def_name']
-  }
-  
-  Note: 'UNIQUE (product_id, attribute_name) - Mỗi sản phẩm chỉ có 1 định nghĩa cho mỗi thuộc tính'
-}
-
-Table variant_attribute_values {
-  id integer [pk]
-  definition_id integer [ref: > variant_attribute_definitions.id, note: 'ON DELETE CASCADE']
-  value varchar(100) [not null, note: 'Giá trị: M, L, XL hoặc Đỏ, Xanh, Vàng...']
-  display_order integer [default: 0, note: 'Thứ tự hiển thị']
-  created_at timestamp
-  
-  indexes {
-    definition_id [name: 'idx_variant_attr_values_def']
-  }
-  
-  Note: 'UNIQUE (definition_id, value) - Mỗi thuộc tính không trùng giá trị'
-}
-
 Table product_variants {
   id integer [pk]
   product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
@@ -433,26 +402,5 @@ Table notifications {
     user_id [name: 'idx_notifications_user']
     type [name: 'idx_notifications_type']
     is_read [name: 'idx_notifications_is_read']
-  }
-}
-
-Table audit_logs {
-  id integer [pk]
-  user_id uuid [ref: > users.id, note: 'ON DELETE SET NULL']
-  action varchar(100) [not null]
-  table_name varchar(100) [not null]
-  record_id integer
-  old_data jsonb
-  new_data jsonb
-  severity varchar(20) [default: 'info', note: 'info|warning|critical']
-  created_at timestamp [default: `CURRENT_TIMESTAMP`]
-  expires_at timestamp [default: `CURRENT_TIMESTAMP + interval ''2 years''`]
-
-  indexes {
-    (table_name, record_id) [name: 'idx_audit_logs_table_record']
-    user_id [name: 'idx_audit_logs_user']
-    created_at [name: 'idx_audit_logs_created_at']
-    expires_at [name: 'idx_audit_logs_expires_at']
-    severity [name: 'idx_audit_logs_severity']
   }
 }

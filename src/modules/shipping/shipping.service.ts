@@ -5,8 +5,7 @@ import {
   createGHNOrder,
   trackGHNOrder,
   GHNCalculateFeeRequest,
-  GHNCreateOrderRequest,
-  GHNTrackingResponse
+  GHNCreateOrderRequest
 } from './ghn.service';
 import { getGHNProvinces, getGHNDistricts, getGHNWards } from '../provinces/ghn.service';
 
@@ -232,7 +231,7 @@ export const createShippingOrder = async (
  */
 export const trackShippingOrder = async (
   trackingNumber: string
-): Promise<GHNTrackingResponse | null> => {
+): Promise<{ status: string; tracking_number: string; current_location?: string; estimated_delivery_date?: string; history?: Array<{ status: string; time: string; location?: string }> } | null> => {
   return await trackGHNOrder(trackingNumber);
 };
 

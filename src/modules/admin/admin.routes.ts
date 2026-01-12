@@ -1,6 +1,5 @@
 import express from 'express';
 import * as adminController from './admin.controller';
-import * as inventoryController from '../inventory/inventory.controller';
 import { authenticate, requireRole } from '../../middlewares/auth.middleware';
 
 const router = express.Router();
@@ -21,10 +20,6 @@ router.post('/categories/:id/restore', requireRole('admin', 'staff'), adminContr
 router.get('/products', requireRole('admin', 'staff'), adminController.getProductsAdmin);
 router.get('/products/:id', requireRole('admin', 'staff'), adminController.getProductAdmin);
 router.post('/products/:id/restore', requireRole('admin', 'staff'), adminController.restoreProductAdmin);
-
-// Quản lý kho (admin)
-router.post('/inventory/stock-in', requireRole('admin', 'staff'), inventoryController.stockIn);
-router.post('/inventory/stock-adjustment', requireRole('admin', 'staff'), inventoryController.stockAdjustment);
 
 // UC-21: Xử lý đơn hàng
 router.get('/orders', adminController.getAllOrders);

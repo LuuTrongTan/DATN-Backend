@@ -13,16 +13,33 @@ export const getNotifications = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.unauthorized(res, 'Người dùng chưa đăng nhập');
     }
 
+    const { page = 1, limit = 20 } = req.query;
+    const pageNum = parseInt(page as string) || 1;
+    const limitNum = parseInt(limit as string) || 20;
+    const offset = (pageNum - 1) * limitNum;
+
+    // Get total count
+    const countResult = await pool.query(
+      'SELECT COUNT(*) FROM notifications WHERE user_id = $1',
+      [userId]
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    // Get paginated notifications
     const result = await pool.query(
       `SELECT id, user_id, type, title, message, link, is_read, created_at
        FROM notifications
        WHERE user_id = $1
        ORDER BY created_at DESC
-       LIMIT 100`,
-      [userId]
+       LIMIT $2 OFFSET $3`,
+      [userId, limitNum, offset]
     );
 
-    return ResponseHandler.success(res, result.rows, 'Lấy danh sách thông báo thành công');
+    return ResponseHandler.paginated(res, result.rows, {
+      page: pageNum,
+      limit: limitNum,
+      total,
+    }, 'Lấy danh sách thông báo thành công');
   } catch (error: any) {
     logger.error('Error fetching notifications', error instanceof Error ? error : new Error(String(error)), {
       userId,

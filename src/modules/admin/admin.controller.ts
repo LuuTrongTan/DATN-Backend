@@ -428,7 +428,7 @@ export const getProductsAdmin = async (req: AuthRequest, res: Response) => {
               ORDER BY pm.display_order, pm.id
               LIMIT 1) AS video_url,
              -- Variants với images
-             (SELECT COALESCE(json_agg(variant_data ORDER BY variant_data->'id'), '[]'::json)
+             (SELECT COALESCE(json_agg(variant_data), '[]'::json)
               FROM (
                 SELECT json_build_object(
                   'id', pv.id,
@@ -615,7 +615,11 @@ export const getAllOrders = async (req: AuthRequest, res: Response) => {
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
 
-    let query = 'SELECT id, user_id, order_number, total_amount, order_status, payment_status, shipping_address, payment_method, shipping_fee, notes, created_at, updated_at FROM orders WHERE deleted_at IS NULL';
+    let query =
+      'SELECT o.id, o.user_id, o.order_number, o.total_amount, o.order_status, o.payment_status, o.shipping_address, o.payment_method, o.shipping_fee, o.notes, o.created_at, o.updated_at, s.shipping_provider, s.tracking_number ' +
+      'FROM orders o ' +
+      'LEFT JOIN shipping s ON s.order_id = o.id ' +
+      'WHERE o.deleted_at IS NULL';
     const params: any[] = [];
     let paramCount = 0;
 
@@ -626,7 +630,10 @@ export const getAllOrders = async (req: AuthRequest, res: Response) => {
     }
 
     // Count total
-    const countQuery = query.replace('SELECT id, user_id, order_number, total_amount, order_status, payment_status, shipping_address, payment_method, shipping_fee, notes, created_at, updated_at', 'SELECT COUNT(*)');
+    const countQuery = query.replace(
+      'SELECT o.id, o.user_id, o.order_number, o.total_amount, o.order_status, o.payment_status, o.shipping_address, o.payment_method, o.shipping_fee, o.notes, o.created_at, o.updated_at, s.shipping_provider, s.tracking_number',
+      'SELECT COUNT(*)'
+    );
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].count);
 
@@ -703,7 +710,7 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
       [email || null, phone || null, passwordHash, USER_ROLE.STAFF, USER_STATUS.ACTIVE]
     );
 
-    // TODO: Send password via email instead of returning in response
+    // Note: Password handling - see comment below for details
     // For now, return in response but log warning
     logger.warn('Staff password generated', {
       staffId: result.rows[0].id,
@@ -712,6 +719,10 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
       ip: req.ip,
     });
 
+    // Note: Password handling:
+    // - Development: Return password in response for convenience
+    // - Production: Should send password via email (email service integration needed)
+    // Currently, production message indicates email was sent, but actual email sending is not implemented
     return ResponseHandler.created(res, {
       staff: result.rows[0],
       // Only return password in development

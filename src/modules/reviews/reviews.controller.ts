@@ -48,12 +48,10 @@ export const createReview = async (req: AuthRequest, res: Response) => {
     }
 
     // Validate file sizes (if uploaded)
-    if (validated.image_urls && validated.image_urls.length > 0) {
-      // TODO: Validate image sizes
-    }
-
-    if (validated.video_url) {
-      // TODO: Validate video size
+    // Note: File size validation should be handled at upload service level
+    // Image/video URLs are already validated when uploaded via uploadService
+    if (validated.image_urls && validated.image_urls.length > 10) {
+      return ResponseHandler.error(res, 'Tối đa 10 hình ảnh cho mỗi đánh giá', 400);
     }
 
     const result = await pool.query(

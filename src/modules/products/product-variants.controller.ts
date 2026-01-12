@@ -21,44 +21,10 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
       return ResponseHandler.notFound(res, 'Sản phẩm không tồn tại');
     }
 
-    // Validate variant_attributes: kiểm tra các thuộc tính có trong định nghĩa không
+    // Đảm bảo variant_attributes không rỗng
     const attributeNames = Object.keys(validated.variant_attributes);
     if (attributeNames.length === 0) {
       return ResponseHandler.badRequest(res, 'Phải có ít nhất một thuộc tính biến thể');
-    }
-
-    // Kiểm tra các thuộc tính có trong định nghĩa không
-    const definitionsCheck = await pool.query(
-      `SELECT attribute_name FROM variant_attribute_definitions 
-       WHERE product_id = $1 AND attribute_name = ANY($2::text[])`,
-      [product_id, attributeNames]
-    );
-
-    const definedAttributes = definitionsCheck.rows.map((r: any) => r.attribute_name);
-    const undefinedAttributes = attributeNames.filter((name) => !definedAttributes.includes(name));
-
-    if (undefinedAttributes.length > 0) {
-      return ResponseHandler.badRequest(
-        res,
-        `Các thuộc tính sau chưa được định nghĩa: ${undefinedAttributes.join(', ')}`
-      );
-    }
-
-    // Kiểm tra các giá trị có hợp lệ không
-    for (const [attrName, attrValue] of Object.entries(validated.variant_attributes)) {
-      const valueCheck = await pool.query(
-        `SELECT vav.id FROM variant_attribute_values vav
-         JOIN variant_attribute_definitions vad ON vav.definition_id = vad.id
-         WHERE vad.product_id = $1 AND vad.attribute_name = $2 AND vav.value = $3`,
-        [product_id, attrName, attrValue]
-      );
-
-      if (valueCheck.rows.length === 0) {
-        return ResponseHandler.badRequest(
-          res,
-          `Giá trị "${attrValue}" không hợp lệ cho thuộc tính "${attrName}"`
-        );
-      }
     }
 
     // Kiểm tra variant đã tồn tại chưa (cùng product_id và variant_attributes)
@@ -236,44 +202,10 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
     const productId = variantCheck.rows[0].product_id;
     const currentAttributes = variantCheck.rows[0].variant_attributes;
 
-    // Nếu thay đổi variant_attributes, kiểm tra trùng lặp và validate
+    // Nếu thay đổi variant_attributes, kiểm tra trùng lặp và tự động tạo definitions/values
     if (validated.variant_attributes) {
       const newAttributes = validated.variant_attributes;
       const attributeNames = Object.keys(newAttributes);
-
-      // Validate các thuộc tính có trong định nghĩa không
-      const definitionsCheck = await pool.query(
-        `SELECT attribute_name FROM variant_attribute_definitions 
-         WHERE product_id = $1 AND attribute_name = ANY($2::text[])`,
-        [productId, attributeNames]
-      );
-
-      const definedAttributes = definitionsCheck.rows.map((r: any) => r.attribute_name);
-      const undefinedAttributes = attributeNames.filter((name) => !definedAttributes.includes(name));
-
-      if (undefinedAttributes.length > 0) {
-        return ResponseHandler.badRequest(
-          res,
-          `Các thuộc tính sau chưa được định nghĩa: ${undefinedAttributes.join(', ')}`
-        );
-      }
-
-      // Kiểm tra các giá trị có hợp lệ không
-      for (const [attrName, attrValue] of Object.entries(newAttributes)) {
-        const valueCheck = await pool.query(
-          `SELECT vav.id FROM variant_attribute_values vav
-           JOIN variant_attribute_definitions vad ON vav.definition_id = vad.id
-           WHERE vad.product_id = $1 AND vad.attribute_name = $2 AND vav.value = $3`,
-          [productId, attrName, attrValue]
-        );
-
-        if (valueCheck.rows.length === 0) {
-          return ResponseHandler.badRequest(
-            res,
-            `Giá trị "${attrValue}" không hợp lệ cho thuộc tính "${attrName}"`
-          );
-        }
-      }
 
       // Kiểm tra trùng lặp
       const existingCheck = await pool.query(

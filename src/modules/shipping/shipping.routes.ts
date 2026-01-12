@@ -20,6 +20,9 @@ router.post('/order', authenticate, requireRole('admin', 'staff'), shippingContr
 // Track shipping order
 router.get('/track/:tracking_number', shippingController.trackOrder);
 
+// GHN webhook callback (public)
+router.post('/ghn/webhook', shippingController.ghnWebhook);
+
 // Get available services (Nhanh, Chuẩn, Tiết kiệm)
 router.get('/services', shippingController.getServices);
 

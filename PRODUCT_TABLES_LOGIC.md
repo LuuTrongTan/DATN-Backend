@@ -267,8 +267,6 @@ CREATE TABLE reviews (
 
 ---
 
-> Các bảng `stock_history` / `stock_alerts` đã loại bỏ. Tồn kho lấy trực tiếp từ `products.stock_quantity` và `product_variants.stock_quantity`. Nếu cần audit/alert sau này, hãy thiết kế lại riêng.
-
 ## 8. Bảng `wishlist` - Yêu Thích
 
 ### Cấu Trúc
@@ -362,9 +360,6 @@ SET stock_quantity = stock_quantity - :quantity,
     updated_at = NOW()
 WHERE id = :product_id AND stock_quantity >= :quantity;
 
--- Ghi lịch sử
-INSERT INTO stock_history (product_id, variant_id, type, quantity, previous_stock, new_stock, reason, created_by)
-VALUES (:product_id, :variant_id, 'out', :quantity, :old_stock, :new_stock, 'Bán hàng', :user_id);
 ```
 
 ---
@@ -373,7 +368,7 @@ VALUES (:product_id, :variant_id, 'out', :quantity, :old_stock, :new_stock, 'Bá
 
 1. **Soft Delete**: Luôn dùng `deleted_at` thay vì DELETE thật
 2. **CASCADE**: Sử dụng ON DELETE CASCADE cho các bảng phụ thuộc
-3. **Stock Management**: Luôn ghi `stock_history` khi thay đổi stock
+3. **Stock Management**: Cập nhật trực tiếp `stock_quantity` trên `products` hoặc `product_variants` (không ghi history)
 4. **Price Snapshot**: Lưu giá trong `order_items` để không bị ảnh hưởng khi giá thay đổi
 5. **Media Query**: Luôn query `product_media` để lấy images, không lưu trong `products`
 6. **Indexes**: Đảm bảo có indexes cho các trường thường query (category_id, is_active, deleted_at)

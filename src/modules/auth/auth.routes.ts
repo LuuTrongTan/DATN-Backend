@@ -5,10 +5,10 @@ import { rateLimiters } from '../../middlewares/rateLimit.middleware';
 
 const router = express.Router();
 
-// UC-01: Đăng ký (có rate limiting)
-router.post('/register', rateLimiters.auth, authController.register);
+// UC-01: Đăng ký (rate limit áp dụng ở app.ts cho toàn bộ /api/auth)
+router.post('/register', authController.register);
 
-// UC-02: Gửi lại mã xác nhận (có rate limiting)
+// UC-02: Gửi lại mã xác nhận (có rate limiting riêng)
 router.post('/resend-verification', rateLimiters.verification, authController.resendVerification);
 
 // UC-03: Xác thực
@@ -17,11 +17,11 @@ router.post('/verify', authController.verify);
 // Firebase Phone Auth: Verify Firebase ID token
 router.post('/verify-firebase-phone', authController.verifyFirebasePhone);
 
-// UC-04: Quên mật khẩu (có rate limiting)
-router.post('/forgot-password', rateLimiters.auth, authController.forgotPassword);
+// UC-04: Quên mật khẩu
+router.post('/forgot-password', authController.forgotPassword);
 
-// UC-05: Đăng nhập (có rate limiting)
-router.post('/login', rateLimiters.auth, authController.login);
+// UC-05: Đăng nhập
+router.post('/login', authController.login);
 
 // UC-06: Đổi mật khẩu
 router.post('/change-password', authenticate, authController.changePassword);

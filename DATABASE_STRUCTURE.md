@@ -984,48 +984,7 @@ Database hệ thống bao gồm **23 bảng** chính, được tổ chức theo 
 
 ---
 
-## 6. Nhóm Quản Lý Kho
-
-### 📋 Bảng `stock_history`
-**Chức năng:** Lịch sử thay đổi tồn kho
-
-**Nhiệm vụ:**
-- Ghi lại mọi thay đổi tồn kho: nhập, xuất, điều chỉnh
-- Lưu tồn kho trước và sau thay đổi
-- Lưu số lượng thay đổi và lý do
-- Ghi lại người thực hiện
-
-**Các trường quan trọng:**
-- `product_id`: ID sản phẩm
-- `variant_id`: ID biến thể (nếu có)
-- `type`: Loại thay đổi (in | out | adjustment)
-- `quantity`: Số lượng thay đổi
-- `previous_stock`: Tồn kho trước
-- `new_stock`: Tồn kho sau
-- `reason`: Lý do
-- `created_by`: Người thực hiện
-
----
-
-### 📋 Bảng `stock_alerts`
-**Chức năng:** Cảnh báo tồn kho thấp
-
-**Nhiệm vụ:**
-- Thiết lập ngưỡng cảnh báo cho sản phẩm/biến thể
-- Theo dõi tồn kho hiện tại
-- Đánh dấu đã gửi thông báo
-
-**Các trường quan trọng:**
-- `product_id`: ID sản phẩm
-- `variant_id`: ID biến thể (nếu có)
-- `threshold`: Ngưỡng cảnh báo (mặc định: 10)
-- `current_stock`: Tồn kho hiện tại
-- `is_notified`: Đã thông báo chưa
-- `notified_at`: Thời gian thông báo
-
----
-
-## 7. Nhóm Tính Năng Người Dùng
+## 6. Nhóm Tính Năng Người Dùng
 
 ### 📋 Bảng `wishlist`
 **Chức năng:** Danh sách yêu thích của người dùng
@@ -1040,7 +999,7 @@ Database hệ thống bao gồm **23 bảng** chính, được tổ chức theo 
 
 ---
 
-## 8. Nhóm Thống Kê và Báo Cáo
+## 7. Nhóm Thống Kê và Báo Cáo
 
 ### 📋 Bảng `daily_statistics`
 **Chức năng:** Thống kê hàng ngày

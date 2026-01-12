@@ -19,8 +19,9 @@ import * as migration015 from './20251120_000015_enable_vector_search';
 import * as migration016 from './20251120_000016_create_payment_transactions_table';
 import * as migration017 from './20251120_000017_create_notifications_table';
 import * as migration018 from './20251120_000018_create_product_tags_table';
-import * as migration019 from './20251120_000019_create_audit_logs_table';
 import * as migration020 from './20251120_000020_create_product_media_table';
+import * as migration021 from './20251222_000001_add_variant_id_to_product_media';
+import * as migration022 from './20251222_000002_add_order_items_snapshot';
 
 export const migrations: MigrationInfo[] = [
   { name: '20251120_000001_create_users_table', migration: migration001.migration },
@@ -41,6 +42,7 @@ export const migrations: MigrationInfo[] = [
   { name: '20251120_000016_create_payment_transactions_table', migration: migration016.migration },
   { name: '20251120_000017_create_notifications_table', migration: migration017.migration },
   { name: '20251120_000018_create_product_tags_table', migration: migration018.migration },
-  { name: '20251120_000019_create_audit_logs_table', migration: migration019.migration },
   { name: '20251120_000020_create_product_media_table', migration: migration020.migration },
+  { name: '20251222_000001_add_variant_id_to_product_media', migration: migration021.migration },
+  { name: '20251222_000002_add_order_items_snapshot', migration: migration022.migration },
 ];

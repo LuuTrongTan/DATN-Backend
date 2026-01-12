@@ -5,6 +5,7 @@ import { pool } from './connections';
 import { appConfig } from './connections/config/app.config';
 import routes from './routes';
 import { errorHandler, notFoundHandler } from './middlewares/error.middleware';
+import { rateLimiters } from './middlewares/rateLimit.middleware';
 
 const app = express();
 
@@ -98,6 +99,9 @@ app.get('/health', async (req, res) => {
 // Serve static files from uploads directory
 const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
 app.use('/uploads', express.static(uploadDir));
+
+// Global rate limit cho các endpoint auth (login/register/forgot-password)
+app.use('/api/auth', rateLimiters.auth);
 
 // API Routes
 app.use('/api', routes);

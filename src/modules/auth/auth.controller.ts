@@ -770,13 +770,14 @@ export const logout = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id;
 
-    // Với JWT stateless, logout chủ yếu là client-side (xóa token)
-    // Nếu cần server-side logout, có thể thêm blacklist token vào database
-    // Hoặc sử dụng Redis để lưu blacklist tokens
-    
-    // TODO: Có thể thêm logic blacklist token nếu cần
-    // const token = req.headers.authorization?.split(' ')[1];
-    // await addTokenToBlacklist(token);
+    // Note: JWT logout strategy
+    // - Current: Stateless JWT - logout is client-side (token removal)
+    // - Optional enhancement: Server-side token blacklist for immediate invalidation
+    //   Implementation options:
+    //   1. Database table for blacklisted tokens (with expiration cleanup)
+    //   2. Redis cache for blacklisted tokens (better performance)
+    //   This is optional as JWT expiration handles most security needs
+    //   Only implement if immediate token invalidation is required (e.g., security breach)
 
     auditLog('USER_LOGOUT', {
       userId,
