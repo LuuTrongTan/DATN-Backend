@@ -2,12 +2,13 @@ import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
 import { orderSchema } from './orders.validation';
-import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../../utils/email.service';
+import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail, checkAndSendLowStockAlert } from '../../utils/email.service';
 import { createShippingRecord } from '../shipping/shipping.service';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 import { appConfig } from '../../connections/config/app.config';
 import { ORDER_STATUS, PAYMENT_STATUS, generateOrderNumber } from '../../constants';
+import { createNotification } from '../notifications/notifications.controller';
 
 // UC-12: Đặt hàng
 export const createOrder = async (req: AuthRequest, res: Response) => {
@@ -224,11 +225,19 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
             'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2',
             [newStock, item.variant_id]
           );
+          // Check and send low stock alert (outside transaction)
+          checkAndSendLowStockAlert(item.product_id, item.variant_id, newStock, 10).catch(err => {
+            logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+          });
         } else {
           await client.query(
             'UPDATE products SET stock_quantity = $1 WHERE id = $2',
             [newStock, item.product_id]
           );
+          // Check and send low stock alert (outside transaction)
+          checkAndSendLowStockAlert(item.product_id, null, newStock, 10).catch(err => {
+            logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+          });
         }
 
       }
@@ -292,6 +301,24 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
             email: user.email,
           });
         }
+      }
+
+      // Send notification to user
+      try {
+        await createNotification({
+          userId: userId,
+          type: 'order_placed',
+          title: 'Đặt hàng thành công',
+          message: `Đơn hàng ${order.order_number} của bạn đã được đặt thành công với tổng giá trị ${parseFloat(order.total_amount).toLocaleString('vi-VN')} VNĐ`,
+          link: `/orders/${order.id}`,
+        });
+      } catch (error: any) {
+        // Log error but don't fail the request
+        logger.error('Failed to create order notification', error instanceof Error ? error : new Error(String(error)), {
+          orderId: order.id,
+          orderNumber: order.order_number,
+          userId: userId,
+        });
       }
 
       // Prepare response
@@ -611,8 +638,16 @@ export const cancelOrder = async (req: AuthRequest, res: Response) => {
           newStock,
           item.variant_id,
         ]);
+        // Check and send low stock alert (outside transaction)
+        checkAndSendLowStockAlert(item.product_id, item.variant_id, newStock, 10).catch(err => {
+          logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+        });
       } else {
         await client.query('UPDATE products SET stock_quantity = $1 WHERE id = $2', [newStock, item.product_id]);
+        // Check and send low stock alert (outside transaction)
+        checkAndSendLowStockAlert(item.product_id, null, newStock, 10).catch(err => {
+          logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+        });
       }
 
     }
@@ -628,6 +663,24 @@ export const cancelOrder = async (req: AuthRequest, res: Response) => {
     );
 
     await client.query('COMMIT');
+
+    // Send notification to user
+    try {
+      await createNotification({
+        userId: userId,
+        type: 'order_cancelled',
+        title: 'Đơn hàng đã bị hủy',
+        message: `Đơn hàng ${order.order_number} của bạn đã được hủy thành công.`,
+        link: `/orders/${order.id}`,
+      });
+    } catch (error: any) {
+      // Log error but don't fail the request
+      logger.error('Failed to create cancellation notification', error instanceof Error ? error : new Error(String(error)), {
+        orderId: order.id,
+        orderNumber: order.order_number,
+        userId: userId,
+      });
+    }
 
     return ResponseHandler.success(res, { order_id: order.id }, 'Hủy đơn hàng thành công');
   } catch (error: any) {

@@ -8,6 +8,7 @@ import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 import { appConfig } from '../../connections/config/app.config';
 import { ORDER_STATUS, USER_ROLE, USER_STATUS } from '../../constants';
+import { createNotification } from '../notifications/notifications.controller';
 
 // UC-18, UC-19, UC-20: Quản lý danh mục
 export const createCategory = async (req: AuthRequest, res: Response) => {
@@ -593,6 +594,52 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
           email: userResult.rows[0].email,
         });
       }
+    }
+
+    // Send notification to user based on order status
+    try {
+      let notificationType: 'order_shipped' | 'order_delivered' | 'order_cancelled' | null = null;
+      let notificationTitle = '';
+      let notificationMessage = '';
+
+      switch (status) {
+        case ORDER_STATUS.SHIPPING:
+          notificationType = 'order_shipped';
+          notificationTitle = 'Đơn hàng đang được vận chuyển';
+          notificationMessage = `Đơn hàng ${order.order_number} của bạn đã được xác nhận và đang được vận chuyển.`;
+          break;
+        case ORDER_STATUS.DELIVERED:
+          notificationType = 'order_delivered';
+          notificationTitle = 'Đơn hàng đã được giao';
+          notificationMessage = `Đơn hàng ${order.order_number} của bạn đã được giao thành công. Cảm ơn bạn đã mua sắm!`;
+          break;
+        case ORDER_STATUS.CANCELLED:
+          notificationType = 'order_cancelled';
+          notificationTitle = 'Đơn hàng đã bị hủy';
+          notificationMessage = `Đơn hàng ${order.order_number} của bạn đã bị hủy.${notes ? ` Lý do: ${notes}` : ''}`;
+          break;
+        default:
+          // For other statuses (PENDING, CONFIRMED, PROCESSING), don't send notification
+          break;
+      }
+
+      if (notificationType) {
+        await createNotification({
+          userId: order.user_id,
+          type: notificationType,
+          title: notificationTitle,
+          message: notificationMessage,
+          link: `/orders/${order.id}`,
+        });
+      }
+    } catch (error: any) {
+      // Log error but don't fail the request
+      logger.error('Failed to create order status notification', error instanceof Error ? error : new Error(String(error)), {
+        orderId,
+        orderNumber: order.order_number,
+        userId: order.user_id,
+        status,
+      });
     }
 
     logger.info('Order status updated successfully', { orderId, status });

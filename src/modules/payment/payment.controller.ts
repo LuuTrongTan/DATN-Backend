@@ -5,6 +5,8 @@ import { createPaymentUrl, verifyPaymentCallback } from './vnpay.service';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 import { ORDER_STATUS, PAYMENT_STATUS } from '../../constants';
+import { createNotification } from '../notifications/notifications.controller';
+import { checkAndSendLowStockAlert } from '../../utils/email.service';
 
 // Create VNPay payment URL
 export const createVNPayPayment = async (req: AuthRequest, res: Response) => {
@@ -153,6 +155,24 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
 
         await client.query('COMMIT');
         logger.info('Payment successful', { orderNumber: verification.orderNumber, transactionId: verification.transactionId });
+
+        // Send notification to user
+        try {
+          await createNotification({
+            userId: lockedOrder.user_id,
+            type: 'payment_success',
+            title: 'Thanh toán thành công',
+            message: `Thanh toán cho đơn hàng ${lockedOrder.order_number} đã thành công. Đơn hàng của bạn đã được xác nhận.`,
+            link: `/orders/${lockedOrder.id}`,
+          });
+        } catch (error: any) {
+          // Log error but don't fail the request
+          logger.error('Failed to create payment success notification', error instanceof Error ? error : new Error(String(error)), {
+            orderId: lockedOrder.id,
+            orderNumber: lockedOrder.order_number,
+            userId: lockedOrder.user_id,
+          });
+        }
       } else {
         // Payment failed: hoàn kho (do đã trừ khi tạo đơn)
         const orderItems = await client.query(
@@ -185,8 +205,16 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
               'UPDATE product_variants SET stock_quantity = $1 WHERE id = $2',
               [newStock, item.variant_id]
             );
+            // Check and send low stock alert (outside transaction)
+            checkAndSendLowStockAlert(item.product_id, item.variant_id, newStock, 10).catch(err => {
+              logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+            });
           } else {
             await client.query('UPDATE products SET stock_quantity = $1 WHERE id = $2', [newStock, item.product_id]);
+            // Check and send low stock alert (outside transaction)
+            checkAndSendLowStockAlert(item.product_id, null, newStock, 10).catch(err => {
+              logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+            });
           }
 
         }
@@ -206,6 +234,24 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
         await client.query('COMMIT');
 
         logger.warn('Payment failed', { orderNumber: verification.orderNumber, responseCode: verification.responseCode });
+
+        // Send notification to user
+        try {
+          await createNotification({
+            userId: lockedOrder.user_id,
+            type: 'payment_failed',
+            title: 'Thanh toán thất bại',
+            message: `Thanh toán cho đơn hàng ${lockedOrder.order_number} đã thất bại. Vui lòng thử lại hoặc liên hệ hỗ trợ.`,
+            link: `/orders/${lockedOrder.id}`,
+          });
+        } catch (error: any) {
+          // Log error but don't fail the request
+          logger.error('Failed to create payment failed notification', error instanceof Error ? error : new Error(String(error)), {
+            orderId: lockedOrder.id,
+            orderNumber: lockedOrder.order_number,
+            userId: lockedOrder.user_id,
+          });
+        }
       }
     } catch (err) {
       await client.query('ROLLBACK');

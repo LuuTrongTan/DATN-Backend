@@ -6,6 +6,7 @@ import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 import { uploadFile, uploadMultipleFiles } from '../upload/storage.service';
 import { syncProductTags, ensureTagExists } from './product-tags.controller';
+import { checkAndSendLowStockAlert } from '../../utils/email.service';
 
 // UC-07: Tìm kiếm và lọc sản phẩm
 export const searchProducts = async (req: AuthRequest, res: Response) => {
@@ -419,6 +420,18 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 
     const product = result.rows[0];
 
+    // Check and send low stock alert if stock is below threshold
+    if (product.stock_quantity < 10) {
+      checkAndSendLowStockAlert(
+        product.id,
+        null,
+        product.stock_quantity,
+        10
+      ).catch(err => {
+        logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+      });
+    }
+
     // Xử lý image URLs từ body (nếu có)
     const imageUrls = Array.isArray(body.image_urls) 
       ? body.image_urls 
@@ -580,6 +593,19 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
        RETURNING id, category_id, sku, name, description, price, stock_quantity, brand, view_count, sold_count, is_active, created_at, updated_at`,
       values
     );
+
+    // Check and send low stock alert if stock_quantity was updated
+    if (updates.stock_quantity !== undefined && result.rows.length > 0) {
+      const updatedProduct = result.rows[0];
+      checkAndSendLowStockAlert(
+        updatedProduct.id,
+        null,
+        updatedProduct.stock_quantity,
+        10
+      ).catch(err => {
+        logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+      });
+    }
 
     // Xử lý cập nhật images nếu có image_urls trong body
     if (updates.image_urls !== undefined) {

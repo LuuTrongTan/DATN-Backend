@@ -4,6 +4,7 @@ import { pool } from '../../connections';
 import { createVariantSchema, updateVariantSchema } from './product-variants.validation';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
+import { checkAndSendLowStockAlert } from '../../utils/email.service';
 
 // Tạo biến thể sản phẩm
 export const createVariant = async (req: AuthRequest, res: Response) => {
@@ -57,6 +58,18 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
     );
 
     const variant = result.rows[0];
+
+    // Check and send low stock alert if stock is below threshold
+    if (variant.stock_quantity < 10) {
+      checkAndSendLowStockAlert(
+        variant.product_id,
+        variant.id,
+        variant.stock_quantity,
+        10
+      ).catch(err => {
+        logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+      });
+    }
 
     // Xử lý variant images nếu có
     const variantImageUrls = Array.isArray(validated.image_urls) 
@@ -280,6 +293,18 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
     );
 
     const variant = result.rows[0];
+
+    // Check and send low stock alert if stock_quantity was updated
+    if (validated.stock_quantity !== undefined && variant) {
+      checkAndSendLowStockAlert(
+        variant.product_id,
+        variant.id,
+        variant.stock_quantity,
+        10
+      ).catch(err => {
+        logger.error('Failed to check low stock alert', err instanceof Error ? err : new Error(String(err)));
+      });
+    }
 
     // Xử lý cập nhật variant images nếu có image_urls trong body
     if (validated.image_urls !== undefined) {

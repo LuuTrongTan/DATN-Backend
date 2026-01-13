@@ -3,6 +3,65 @@ import nodemailer from 'nodemailer';
 import { emailConfig } from '../connections/config/app.config';
 import { logger } from './logging';
 
+// Helper function to check and send low stock alert
+export const checkAndSendLowStockAlert = async (
+  productId: number,
+  variantId: number | null | undefined,
+  newStock: number,
+  threshold: number = 10
+): Promise<void> => {
+  // Only send alert if stock is below threshold
+  if (newStock >= threshold) {
+    return;
+  }
+
+  try {
+    // Get product info
+    const productResult = await pool.query(
+      `SELECT id, name, sku FROM products WHERE id = $1 AND deleted_at IS NULL`,
+      [productId]
+    );
+
+    if (productResult.rows.length === 0) {
+      return;
+    }
+
+    const product = productResult.rows[0];
+    let variantAttributes: Record<string, string> | undefined;
+
+    // If variant, get variant info
+    if (variantId) {
+      const variantResult = await pool.query(
+        `SELECT variant_attributes FROM product_variants WHERE id = $1 AND deleted_at IS NULL`,
+        [variantId]
+      );
+
+      if (variantResult.rows.length > 0) {
+        const attrs = variantResult.rows[0].variant_attributes;
+        variantAttributes = typeof attrs === 'string' ? JSON.parse(attrs) : attrs;
+      }
+    }
+
+    // Send alert email
+    await sendLowStockAlertEmail({
+      productId: product.id,
+      productName: product.name,
+      sku: product.sku,
+      variantId: variantId || undefined,
+      variantAttributes,
+      currentStock: newStock,
+      threshold,
+    });
+  } catch (error: any) {
+    // Log error but don't fail the operation
+    logger.error('Error checking low stock alert', error instanceof Error ? error : new Error(String(error)), {
+      productId,
+      variantId,
+      newStock,
+    });
+  }
+};
+
 const transporter = nodemailer.createTransport({
   host: emailConfig.host,
   port: emailConfig.port,
@@ -156,6 +215,96 @@ export const sendOrderStatusUpdateEmail = async (
     logger.info('Order status update email sent successfully', { orderNumber, status, email: customerEmail });
   } catch (error: any) {
     logger.error('Failed to send order status update email', { orderNumber, error: error.message });
+  }
+};
+
+// Send low stock alert email to admin
+interface LowStockAlertData {
+  productId: number;
+  productName: string;
+  sku?: string;
+  variantId?: number;
+  variantAttributes?: Record<string, string>;
+  currentStock: number;
+  threshold: number;
+}
+
+export const sendLowStockAlertEmail = async (data: LowStockAlertData): Promise<void> => {
+  if (!emailConfig.user || !emailConfig.pass) {
+    logger.warn('Email not configured, skipping low stock alert email', { productId: data.productId });
+    return;
+  }
+
+  // Get admin emails from database
+  const adminEmails = await pool.query(
+    `SELECT email FROM users WHERE role = 'admin' AND status = 'active' AND email IS NOT NULL`,
+    []
+  );
+
+  if (adminEmails.rows.length === 0) {
+    logger.warn('No admin emails found for low stock alert', { productId: data.productId });
+    return;
+  }
+
+  const recipientEmails = adminEmails.rows.map((row: any) => row.email).filter(Boolean);
+
+  if (recipientEmails.length === 0) {
+    logger.warn('No valid admin emails found for low stock alert', { productId: data.productId });
+    return;
+  }
+
+  const variantInfo = data.variantId
+    ? `<p><strong>Biến thể:</strong> ${data.variantAttributes ? Object.entries(data.variantAttributes).map(([k, v]) => `${k}: ${v}`).join(', ') : `ID: ${data.variantId}`}</p>`
+    : '';
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <h2 style="color: #cf1322; border-bottom: 2px solid #cf1322; padding-bottom: 10px;">
+        ⚠️ Cảnh báo: Tồn kho thấp
+      </h2>
+      
+      <p>Xin chào Admin,</p>
+      <p>Sản phẩm sau đây có tồn kho thấp hơn ngưỡng cảnh báo (<strong>${data.threshold}</strong> sản phẩm):</p>
+      
+      <div style="background: #fff2f0; border-left: 4px solid #cf1322; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <h3 style="margin-top: 0; color: #cf1322;">Thông tin sản phẩm</h3>
+        <p><strong>Tên sản phẩm:</strong> ${data.productName}</p>
+        ${data.sku ? `<p><strong>SKU:</strong> ${data.sku}</p>` : ''}
+        ${variantInfo}
+        <p><strong>ID sản phẩm:</strong> ${data.productId}</p>
+        <p style="font-size: 18px; margin-top: 15px;">
+          <strong style="color: #cf1322;">Tồn kho hiện tại: ${data.currentStock}</strong>
+        </p>
+      </div>
+      
+      <p style="background: #fffbe6; padding: 10px; border-radius: 5px; border-left: 4px solid #faad14;">
+        <strong>⚠️ Lưu ý:</strong> Vui lòng kiểm tra và nhập thêm hàng để đảm bảo không bị hết hàng.
+      </p>
+      
+      <p style="color: #999; font-size: 12px; margin-top: 30px;">
+        Email này được gửi tự động từ hệ thống quản lý kho hàng.
+      </p>
+    </div>
+  `;
+
+  try {
+    await transporter.sendMail({
+      from: `"XGame Store - Hệ thống" <${emailConfig.user}>`,
+      to: recipientEmails.join(', '),
+      subject: `⚠️ Cảnh báo: Tồn kho thấp - ${data.productName}`,
+      html,
+    });
+    logger.info('Low stock alert email sent successfully', { 
+      productId: data.productId, 
+      variantId: data.variantId,
+      currentStock: data.currentStock,
+      recipientCount: recipientEmails.length 
+    });
+  } catch (error: any) {
+    logger.error('Failed to send low stock alert email', { 
+      productId: data.productId, 
+      error: error.message 
+    });
   }
 };
 
