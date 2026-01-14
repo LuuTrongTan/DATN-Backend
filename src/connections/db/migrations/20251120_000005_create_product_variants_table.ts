@@ -8,7 +8,7 @@ export const migration: Migration = {
         id SERIAL PRIMARY KEY,
         product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
         -- SKU riêng cho từng biến thể (ví dụ: AO-THUN-001-M-DO)
-        sku VARCHAR(100) UNIQUE,
+        sku VARCHAR(100),
         -- Kết hợp các thuộc tính dạng JSONB: {"Size": "M", "Color": "Đỏ", "Material": "Cotton"}
         -- Hỗ trợ nhiều thuộc tính cùng lúc: Size + Color + Material...
         variant_attributes JSONB NOT NULL DEFAULT '{}',
@@ -33,7 +33,7 @@ export const migration: Migration = {
     `);
 
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_product_variants_sku ON product_variants(sku) WHERE sku IS NOT NULL
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_product_variants_sku ON product_variants(sku) WHERE sku IS NOT NULL AND deleted_at IS NULL
     `);
 
     // GIN index cho JSONB để query nhanh

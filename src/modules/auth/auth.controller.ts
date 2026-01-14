@@ -26,66 +26,114 @@ import { ResponseHandler } from '../../utils/response';
 import { logger, auditLog } from '../../utils/logging';
 import { LoginResponse, AuthResponse, RefreshTokenResponse } from '../../types/response.types';
 import { USER_STATUS, USER_ROLE } from '../../constants';
+import { pool } from '../../connections';
 
-// UC-01: Đăng ký chỉ bằng số điện thoại (bắt buộc Firebase ID token)
+// Helper: đọc config bật/tắt Firebase khi đăng ký bằng số điện thoại
+const PHONE_FIREBASE_CONFIG_KEY = 'auth.require_firebase_for_phone_registration';
+
+const getRequireFirebaseForPhoneRegistration = async (): Promise<boolean> => {
+  try {
+    const result = await pool.query(
+      'SELECT value FROM app_settings WHERE key = $1 LIMIT 1',
+      [PHONE_FIREBASE_CONFIG_KEY]
+    );
+
+    if (result.rows.length === 0) {
+      // Mặc định giữ hành vi cũ: bắt buộc Firebase
+      return true;
+    }
+
+    const value = result.rows[0].value || {};
+    if (typeof value.enabled === 'boolean') {
+      return value.enabled;
+    }
+    if (typeof value.enabled === 'string') {
+      const str = value.enabled.toLowerCase();
+      if (str === 'true') return true;
+      if (str === 'false') return false;
+    }
+
+    return true;
+  } catch (error: any) {
+    logger?.error?.('[Register] Failed to read phone Firebase config, fallback to enabled', {
+      error: error.message,
+    });
+    return true;
+  }
+};
+
+// UC-01: Đăng ký chỉ bằng số điện thoại (tùy config có bắt buộc Firebase ID token hay không)
 export const register = async (req: AuthRequest, res: Response) => {
   try {
-    const validated = registerSchema.parse(req.body);
+    const requireFirebase = await getRequireFirebaseForPhoneRegistration();
+
+    const validated = registerSchema.parse({
+      ...req.body,
+      // Nếu không yêu cầu Firebase, cho phép idToken null mà không văng lỗi validation
+      ...(requireFirebase ? {} : { idToken: req.body.idToken ?? '' }),
+    });
+
     const { phone, password, idToken } = validated;
 
     logger.info('[Register] Starting phone registration', {
       phone,
       hasIdToken: !!idToken,
+      requireFirebase,
       ip: req.ip,
     });
-
-    // Verify Firebase ID token (bắt buộc)
     let verifiedPhone: string | null = null;
-    try {
-      logger.info('[Register] Verifying Firebase ID token...');
-      const decodedToken = await verifyFirebaseToken(idToken);
 
-      // Verify phone number matches
-      if (!decodedToken.phone_number) {
-        logger.warn('[Register] Firebase token does not contain phone number', { ip: req.ip });
-        return ResponseHandler.error(
-          res,
-          'Firebase token không chứa số điện thoại. Vui lòng xác thực số điện thoại trước.',
-          400
-        );
-      }
+    if (requireFirebase) {
+      // Verify Firebase ID token (bắt buộc)
+      try {
+        logger.info('[Register] Verifying Firebase ID token...');
+        const decodedToken = await verifyFirebaseToken(idToken);
 
-      // Kiểm tra phone number trong token khớp với phone trong request
-      // Firebase trả về phone với format +84..., cần convert về 10 số
-      const tokenPhone = decodedToken.phone_number.replace(/^\+84/, '0');
-      if (tokenPhone !== phone) {
-        logger.warn('[Register] Phone number mismatch', {
-          tokenPhone,
-          providedPhone: phone,
+        // Verify phone number matches
+        if (!decodedToken.phone_number) {
+          logger.warn('[Register] Firebase token does not contain phone number', { ip: req.ip });
+          return ResponseHandler.error(
+            res,
+            'Firebase token không chứa số điện thoại. Vui lòng xác thực số điện thoại trước.',
+            400
+          );
+        }
+
+        // Kiểm tra phone number trong token khớp với phone trong request
+        // Firebase trả về phone với format +84..., cần convert về 10 số
+        const tokenPhone = decodedToken.phone_number.replace(/^\+84/, '0');
+        if (tokenPhone !== phone) {
+          logger.warn('[Register] Phone number mismatch', {
+            tokenPhone,
+            providedPhone: phone,
+            ip: req.ip,
+          });
+          return ResponseHandler.error(
+            res,
+            'Số điện thoại không khớp với token Firebase',
+            400
+          );
+        }
+
+        verifiedPhone = phone;
+
+        logger.info('[Register] Firebase token verified successfully', {
+          phone: verifiedPhone,
+        });
+      } catch (firebaseError: any) {
+        logger.error('[Register] Firebase verification failed', {
+          error: firebaseError.message,
           ip: req.ip,
         });
         return ResponseHandler.error(
           res,
-          'Số điện thoại không khớp với token Firebase',
+          'Xác thực Firebase thất bại: ' + firebaseError.message,
           400
         );
       }
-
+    } else {
+      // Không yêu cầu Firebase: chỉ cần số điện thoại hợp lệ (đã được validate bởi registerSchema)
       verifiedPhone = phone;
-
-      logger.info('[Register] Firebase token verified successfully', {
-        phone: verifiedPhone,
-      });
-    } catch (firebaseError: any) {
-      logger.error('[Register] Firebase verification failed', {
-        error: firebaseError.message,
-        ip: req.ip,
-      });
-      return ResponseHandler.error(
-        res,
-        'Xác thực Firebase thất bại: ' + firebaseError.message,
-        400
-      );
     }
 
     // Check if user already exists

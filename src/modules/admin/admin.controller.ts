@@ -757,27 +757,31 @@ export const createStaff = async (req: AuthRequest, res: Response) => {
       [email || null, phone || null, passwordHash, USER_ROLE.STAFF, USER_STATUS.ACTIVE]
     );
 
-    // Note: Password handling - see comment below for details
-    // For now, return in response but log warning
-    logger.warn('Staff password generated', {
+    // Ghi log tạo tài khoản staff (không log mật khẩu)
+    logger.warn('Staff account created', {
       staffId: result.rows[0].id,
       email: result.rows[0].email,
       phone: result.rows[0].phone,
+      env: appConfig.nodeEnv,
       ip: req.ip,
     });
 
-    // Note: Password handling:
-    // - Development: Return password in response for convenience
-    // - Production: Should send password via email (email service integration needed)
-    // Currently, production message indicates email was sent, but actual email sending is not implemented
-    return ResponseHandler.created(res, {
+    // Password handling:
+    // - Development: trả về defaultPassword trong response để tiện test.
+    // - Production: KHÔNG trả password trong response, cần triển khai gửi mật khẩu/đặt lại qua email an toàn.
+    const responsePayload: any = {
       staff: result.rows[0],
-      // Only return password in development
-      ...(appConfig.nodeEnv === 'development' && { defaultPassword }),
-      message: appConfig.nodeEnv === 'production' 
-        ? 'Tài khoản staff đã được tạo. Mật khẩu đã được gửi qua email.' 
-        : 'Tài khoản staff đã được tạo. Vui lòng lưu mật khẩu.',
-    }, 'Tạo tài khoản staff thành công');
+      message:
+        appConfig.nodeEnv === 'production'
+          ? 'Tài khoản staff đã được tạo. Vui lòng hướng dẫn nhân viên đặt lại mật khẩu qua kênh an toàn.'
+          : 'Tài khoản staff đã được tạo. Vui lòng lưu mật khẩu.',
+    };
+
+    if (appConfig.nodeEnv === 'development') {
+      responsePayload.defaultPassword = defaultPassword;
+    }
+
+    return ResponseHandler.created(res, responsePayload, 'Tạo tài khoản staff thành công');
   } catch (error: any) {
     logger.error('Error creating staff', error instanceof Error ? error : new Error(String(error)), {
       email,

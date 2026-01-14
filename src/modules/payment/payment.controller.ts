@@ -82,7 +82,7 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
 
     // Find order by order_number (not deleted)
     const orderResult = await pool.query(
-      `SELECT id, order_number, payment_status, order_status, total_amount 
+      `SELECT id, user_id, order_number, payment_status, order_status, total_amount 
        FROM orders 
        WHERE order_number = $1 AND deleted_at IS NULL`,
       [verification.orderNumber]
@@ -103,7 +103,7 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
 
       // Khóa đơn hàng
       const lockedOrderResult = await client.query(
-        `SELECT id, order_number, payment_status, order_status, total_amount 
+        `SELECT id, user_id, order_number, payment_status, order_status, total_amount 
          FROM orders 
          WHERE id = $1 FOR UPDATE`,
         [order.id]
@@ -261,13 +261,14 @@ export const vnpayCallback = async (req: AuthRequest, res: Response) => {
       client?.release();
     }
 
-    // Redirect to frontend
+    // Redirect to frontend (dựa trên trạng thái thực tế sau khi xử lý ở trên)
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const redirectUrl = verification.responseCode === '00'
-      ? `${frontendUrl}/orders/${order.id}?payment=success`
-      : `${frontendUrl}/orders/${order.id}?payment=failed`;
+    const redirectUrl =
+      verification.responseCode === '00'
+        ? `${frontendUrl}/orders/${order.id}?payment=success`
+        : `${frontendUrl}/orders/${order.id}?payment=failed`;
 
-    res.redirect(redirectUrl);
+    return res.redirect(redirectUrl);
   } catch (error: any) {
     logger.error('Error processing VNPay callback', { error: error.message });
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';

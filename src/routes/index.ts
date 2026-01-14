@@ -13,6 +13,7 @@ import shippingRoutes from '../modules/shipping/shipping.routes';
 import notificationRoutes from '../modules/notifications/notifications.routes';
 import provincesRoutes from '../modules/provinces/provinces.routes';
 import refundsRoutes from '../modules/refunds/refunds.routes';
+import adminSettingsRoutes from '../modules/admin/admin-settings.routes';
 
 const router = express.Router();
 
@@ -23,6 +24,7 @@ router.use('/cart', cartRoutes);
 router.use('/orders', ordersRoutes);
 router.use('/reviews', reviewsRoutes);
 router.use('/admin', adminRoutes);
+router.use('/admin/settings', adminSettingsRoutes);
 router.use('/upload', uploadRoutes);
 router.use('/addresses', addressesRoutes);
 router.use('/wishlist', wishlistRoutes);

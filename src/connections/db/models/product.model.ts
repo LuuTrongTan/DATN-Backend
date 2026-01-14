@@ -20,7 +20,7 @@ export interface Product {
 
 export interface CreateProductInput {
   category_id?: number | null;
-  sku: string; // REQUIRED - unique
+  sku?: string; // optional - sẽ được auto-generate nếu không truyền
   name: string;
   description?: string | null;
   price: number; // integer (VND)

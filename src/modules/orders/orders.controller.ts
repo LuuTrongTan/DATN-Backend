@@ -199,7 +199,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
         let currentStock: number;
         if (item.variant_id) {
           const stockResult = await client.query(
-            'SELECT stock_quantity FROM product_variants WHERE id = $1 AND deleted_at IS NULL',
+            'SELECT stock_quantity FROM product_variants WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
             [item.variant_id]
           );
           if (stockResult.rows.length === 0) {
@@ -208,7 +208,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
           currentStock = parseInt(stockResult.rows[0].stock_quantity);
         } else {
           const stockResult = await client.query(
-            'SELECT stock_quantity FROM products WHERE id = $1 AND deleted_at IS NULL',
+            'SELECT stock_quantity FROM products WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
             [item.product_id]
           );
           if (stockResult.rows.length === 0) {
@@ -448,7 +448,7 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
     );
     const shipping = shippingResult.rows[0];
 
-    // Lấy order items với product và variant info
+    // Lấy order items với product và variant info (kèm cả snapshot SKU/thuộc tính)
     const itemsResult = await pool.query(
       `SELECT 
          oi.id,
@@ -456,12 +456,15 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
          oi.variant_id,
          oi.quantity,
          oi.price,
+         oi.product_sku,
+         oi.variant_sku,
+         oi.variant_attributes_snapshot,
          p.id as product_id_full,
          p.name as product_name,
          p.price as product_price,
-        pv.id as variant_id_full,
-        pv.variant_attributes,
-        pv.price_adjustment
+         pv.id as variant_id_full,
+         pv.variant_attributes,
+         pv.price_adjustment
        FROM order_items oi 
        JOIN products p ON oi.product_id = p.id
        LEFT JOIN product_variants pv ON oi.variant_id = pv.id
@@ -469,57 +472,103 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       [id]
     );
 
-    // Lấy images cho từng product và variant
-    const items = await Promise.all(
-      itemsResult.rows.map(async (item) => {
-        // Lấy product images
-        const productImagesResult = await pool.query(
-          `SELECT image_url 
-           FROM product_media 
-           WHERE product_id = $1 AND type = 'image' AND variant_id IS NULL 
-           ORDER BY display_order, id`,
-          [item.product_id]
-        );
-        const productImageUrls = productImagesResult.rows.map((row: any) => row.image_url);
+    const rawItems = itemsResult.rows;
 
-        // Lấy variant images nếu có variant
-        let variantImageUrls: string[] = [];
-        if (item.variant_id) {
-          const variantImagesResult = await pool.query(
-            `SELECT image_url 
-             FROM product_media 
-             WHERE variant_id = $1 AND type = 'image' 
-             ORDER BY display_order, id`,
-            [item.variant_id]
-          );
-          variantImageUrls = variantImagesResult.rows.map((row: any) => row.image_url);
-        }
-
-        return {
-          id: item.id,
-          product_id: item.product_id,
-          variant_id: item.variant_id,
-          quantity: item.quantity,
-          price: item.price,
-          product: {
-            id: item.product_id_full,
-            name: item.product_name,
-            price: item.product_price,
-            image_urls: productImageUrls,
-          },
-          variant: item.variant_id_full
-            ? {
-                id: item.variant_id_full,
-                variant_attributes: typeof item.variant_attributes === 'string' 
-                  ? JSON.parse(item.variant_attributes) 
-                  : item.variant_attributes || {},
-                price_adjustment: item.price_adjustment,
-                image_urls: variantImageUrls,
-              }
-            : null,
-        };
-      })
+    // Gom danh sách product_id và variant_id để tránh N+1 queries khi lấy images
+    const productIds = Array.from(
+      new Set(rawItems.map(row => row.product_id).filter((pid) => pid != null))
     );
+    const variantIds = Array.from(
+      new Set(rawItems.map(row => row.variant_id).filter((vid) => vid != null))
+    );
+
+    let productImagesMap = new Map<number, string[]>();
+    let variantImagesMap = new Map<number, string[]>();
+
+    if (productIds.length > 0) {
+      const productImagesResult = await pool.query(
+        `SELECT product_id, image_url
+         FROM product_media
+         WHERE product_id = ANY($1::int[]) 
+           AND type = 'image' 
+           AND variant_id IS NULL
+         ORDER BY display_order, id`,
+        [productIds]
+      );
+
+      productImagesMap = productImagesResult.rows.reduce(
+        (map: Map<number, string[]>, row: any) => {
+          const pid = row.product_id as number;
+          const list = map.get(pid) || [];
+          list.push(row.image_url);
+          map.set(pid, list);
+          return map;
+        },
+        new Map<number, string[]>()
+      );
+    }
+
+    if (variantIds.length > 0) {
+      const variantImagesResult = await pool.query(
+        `SELECT variant_id, image_url
+         FROM product_media
+         WHERE variant_id = ANY($1::int[])
+           AND type = 'image'
+         ORDER BY display_order, id`,
+        [variantIds]
+      );
+
+      variantImagesMap = variantImagesResult.rows.reduce(
+        (map: Map<number, string[]>, row: any) => {
+          const vid = row.variant_id as number;
+          const list = map.get(vid) || [];
+          list.push(row.image_url);
+          map.set(vid, list);
+          return map;
+        },
+        new Map<number, string[]>()
+      );
+    }
+
+    const items = rawItems.map((item) => {
+      const productImageUrls = productImagesMap.get(item.product_id) || [];
+      const variantImageUrls = item.variant_id
+        ? variantImagesMap.get(item.variant_id) || []
+        : [];
+
+      return {
+        id: item.id,
+        product_id: item.product_id,
+        variant_id: item.variant_id,
+        quantity: item.quantity,
+        price: item.price,
+        // Snapshot giúp giữ ổn định dữ liệu lịch sử đơn hàng
+        product_sku: item.product_sku,
+        variant_sku: item.variant_sku,
+        variant_attributes_snapshot: item.variant_attributes_snapshot
+          ? (typeof item.variant_attributes_snapshot === 'string'
+              ? JSON.parse(item.variant_attributes_snapshot)
+              : item.variant_attributes_snapshot)
+          : null,
+        product: {
+          id: item.product_id_full,
+          name: item.product_name,
+          price: item.product_price,
+          image_urls: productImageUrls,
+        },
+        variant: item.variant_id_full
+          ? {
+              id: item.variant_id_full,
+              variant_attributes:
+                typeof item.variant_attributes === 'string'
+                  ? JSON.parse(item.variant_attributes)
+                  : item.variant_attributes || {},
+              price_adjustment: item.price_adjustment,
+              image_urls: variantImageUrls,
+            }
+          : null,
+      };
+    });
 
     // Lấy refunds của order
     const refundsResult = await pool.query(

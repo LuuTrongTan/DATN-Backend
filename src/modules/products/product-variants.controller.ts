@@ -42,6 +42,19 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
       );
     }
 
+    // Nếu có SKU, kiểm tra trùng SKU với các biến thể chưa bị xóa
+    if (validated.sku) {
+      const skuCheck = await pool.query(
+        `SELECT id FROM product_variants 
+         WHERE sku = $1 AND deleted_at IS NULL`,
+        [validated.sku]
+      );
+
+      if (skuCheck.rows.length > 0) {
+        return ResponseHandler.conflict(res, 'SKU biến thể đã tồn tại');
+      }
+    }
+
     const result = await pool.query(
       `INSERT INTO product_variants (product_id, sku, variant_attributes, price_adjustment, stock_quantity, image_url, is_active)
        VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
@@ -130,6 +143,10 @@ export const createVariant = async (req: AuthRequest, res: Response) => {
     if (error.name === 'ZodError') {
       return ResponseHandler.badRequest(res, 'Dữ liệu không hợp lệ', error.errors);
     }
+    // Handle unique constraint violation for SKU một cách thân thiện
+    if (error.code === '23505') {
+      return ResponseHandler.conflict(res, 'SKU biến thể đã tồn tại');
+    }
     logger.error('Error creating variant', error instanceof Error ? error : new Error(String(error)), {
       productId: product_id,
       body: req.body,
@@ -204,7 +221,7 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
 
     // Kiểm tra variant tồn tại
     const variantCheck = await pool.query(
-      'SELECT id, product_id, variant_attributes FROM product_variants WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id, product_id, sku, variant_attributes FROM product_variants WHERE id = $1 AND deleted_at IS NULL',
       [id]
     );
 
@@ -213,7 +230,21 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
     }
 
     const productId = variantCheck.rows[0].product_id;
+    const currentSku = variantCheck.rows[0].sku;
     const currentAttributes = variantCheck.rows[0].variant_attributes;
+
+    // Nếu thay đổi SKU, kiểm tra trùng lặp
+    if (validated.sku !== undefined && validated.sku !== currentSku) {
+      const skuCheck = await pool.query(
+        `SELECT id FROM product_variants 
+         WHERE sku = $1 AND deleted_at IS NULL AND id != $2`,
+        [validated.sku, id]
+      );
+
+      if (skuCheck.rows.length > 0) {
+        return ResponseHandler.conflict(res, 'SKU biến thể đã tồn tại');
+      }
+    }
 
     // Nếu thay đổi variant_attributes, kiểm tra trùng lặp và tự động tạo definitions/values
     if (validated.variant_attributes) {
@@ -350,6 +381,10 @@ export const updateVariant = async (req: AuthRequest, res: Response) => {
   } catch (error: any) {
     if (error.name === 'ZodError') {
       return ResponseHandler.badRequest(res, 'Dữ liệu không hợp lệ', error.errors);
+    }
+    // Handle unique constraint violation for SKU một cách thân thiện
+    if (error.code === '23505') {
+      return ResponseHandler.conflict(res, 'SKU biến thể đã tồn tại');
     }
     logger.error('Error updating variant', error instanceof Error ? error : new Error(String(error)), {
       variantId: id,

@@ -82,6 +82,10 @@ export const createPaymentUrl = (
 
 // Verify payment callback
 export const verifyPaymentCallback = (query: Record<string, string>): {
+  /**
+   * isValid: chữ ký callback hợp lệ (đã verify HMAC thành công).
+   * Không phản ánh việc thanh toán thành công hay thất bại – dùng responseCode riêng.
+   */
   isValid: boolean;
   orderNumber?: string;
   amount?: number;
@@ -122,11 +126,9 @@ export const verifyPaymentCallback = (query: Record<string, string>): {
   const amount = parseInt(query['vnp_Amount']) / 100; // Convert from cents
   const transactionId = query['vnp_TransactionNo'];
 
-  // Response code '00' means success
-  const isValid = responseCode === '00';
-
+  // Chữ ký hợp lệ, còn thành công hay không phụ thuộc responseCode
   return {
-    isValid,
+    isValid: true,
     orderNumber,
     amount,
     transactionId,

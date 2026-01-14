@@ -8,7 +8,7 @@ export const migration: Migration = {
         id SERIAL PRIMARY KEY,
         category_id INTEGER REFERENCES categories(id),
         -- Thông tin cơ bản
-        sku VARCHAR(100) UNIQUE,
+        sku VARCHAR(100),
         name VARCHAR(255) NOT NULL,
         description TEXT,
         -- Giá cả
@@ -53,7 +53,7 @@ export const migration: Migration = {
     `);
 
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku) WHERE sku IS NOT NULL
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_products_sku ON products(sku) WHERE sku IS NOT NULL AND deleted_at IS NULL
     `);
 
     // Full-text search index (GIN index cho tsvector)
