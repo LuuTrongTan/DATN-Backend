@@ -1,10 +1,16 @@
 import { z } from 'zod';
 
+// Password validation - đồng nhất cho toàn hệ thống
+// Yêu cầu: ít nhất 8 ký tự
+const passwordSchema = z
+  .string()
+  .min(8, 'Mật khẩu phải có ít nhất 8 ký tự');
+
 // Validation schemas cho module Auth
 // UC-01: Đăng ký chỉ bằng số điện thoại (bắt buộc Firebase ID token)
 export const registerSchema = z.object({
   phone: z.string().regex(/^\d{10}$/, 'Số điện thoại phải có 10 chữ số'),
-  password: z.string().min(8, 'Mật khẩu phải có ít nhất 8 ký tự'),
+  password: passwordSchema,
   idToken: z.string().min(1, 'Firebase ID token là bắt buộc để xác thực số điện thoại'),
 });
 
@@ -28,8 +34,8 @@ export const forgotPasswordSchema = z.object({
   email: z.string().email('Email không hợp lệ').optional(),
   phone: z.string().regex(/^\d{10}$/, 'Số điện thoại phải có 10 chữ số').optional(),
   idToken: z.string().optional(), // Bắt buộc nếu dùng phone
-  newPassword: z.string().min(8, 'Mật khẩu mới phải có ít nhất 8 ký tự').optional(),
-  confirmPassword: z.string().min(8, 'Xác nhận mật khẩu phải có ít nhất 8 ký tự').optional(),
+  newPassword: passwordSchema.optional(),
+  confirmPassword: passwordSchema.optional(),
 }).refine(data => data.email || data.phone, {
   message: 'Phải cung cấp email hoặc số điện thoại',
 }).refine(data => {
@@ -59,8 +65,8 @@ export const forgotPasswordSchema = z.object({
 export const resetPasswordSchema = z.object({
   code: z.string().min(1, 'Mã xác thực không được để trống'),
   email: z.string().email('Email không hợp lệ'),
-  newPassword: z.string().min(8, 'Mật khẩu mới phải có ít nhất 8 ký tự'),
-  confirmPassword: z.string().min(8, 'Xác nhận mật khẩu phải có ít nhất 8 ký tự'),
+  newPassword: passwordSchema,
+  confirmPassword: passwordSchema,
 }).refine(data => data.newPassword === data.confirmPassword, {
   message: 'Xác nhận mật khẩu không khớp',
   path: ['confirmPassword'],
@@ -84,6 +90,16 @@ export const refreshTokenSchema = z.object({
 
 export const deleteAccountSchema = z.object({
   password: z.string().min(1, 'Mật khẩu không được để trống'),
+});
+
+// Schema cho đổi mật khẩu
+export const changePasswordSchema = z.object({
+  oldPassword: z.string().min(1, 'Mật khẩu hiện tại không được để trống'),
+  newPassword: passwordSchema,
+  confirmPassword: passwordSchema,
+}).refine(data => data.newPassword === data.confirmPassword, {
+  message: 'Xác nhận mật khẩu không khớp',
+  path: ['confirmPassword'],
 });
 
 

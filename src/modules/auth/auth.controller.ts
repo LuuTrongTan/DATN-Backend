@@ -13,6 +13,7 @@ import {
   refreshTokenSchema,
   deleteAccountSchema,
   addRecoveryEmailSchema,
+  changePasswordSchema,
 } from './auth.validation';
 import {
   generateCode,
@@ -606,19 +607,9 @@ export const login = async (req: AuthRequest, res: Response) => {
 // UC-06: Đổi mật khẩu
 export const changePassword = async (req: AuthRequest, res: Response) => {
   try {
-    const { oldPassword, newPassword, confirmPassword } = req.body;
-
-    if (!oldPassword || !newPassword || !confirmPassword) {
-      return ResponseHandler.error(res, 'Vui lòng điền đầy đủ thông tin', 400);
-    }
-
-    if (newPassword.length < 8) {
-      return ResponseHandler.error(res, 'Mật khẩu mới phải có ít nhất 8 ký tự', 400);
-    }
-
-    if (newPassword !== confirmPassword) {
-      return ResponseHandler.error(res, 'Xác nhận mật khẩu không khớp', 400);
-    }
+    // Validate input với schema
+    const validated = changePasswordSchema.parse(req.body);
+    const { oldPassword, newPassword } = validated;
 
     const userId = String(req.user!.id);
 
