@@ -3,11 +3,12 @@
 export interface UserAddress {
   id: number;
   user_id: string; // UUID
-  full_name: string; // not null
-  phone: string; // not null - Số điện thoại Việt Nam (10 số)
   province: string; // not null
   district: string; // not null
   ward: string; // not null
+  province_code: number; // GHN ProvinceID - not null
+  district_code: number; // GHN DistrictID - not null
+  ward_code: string; // GHN WardCode - not null
   street_address: string; // text - not null
   is_default: boolean; // default: false
   created_at: Date;
@@ -17,21 +18,23 @@ export interface UserAddress {
 
 export interface CreateUserAddressInput {
   user_id: string; // UUID
-  full_name: string; // REQUIRED
-  phone: string; // REQUIRED - 10 số
   province: string; // REQUIRED
   district: string; // REQUIRED
   ward: string; // REQUIRED
+  province_code: number; // REQUIRED - GHN ProvinceID
+  district_code: number; // REQUIRED - GHN DistrictID
+  ward_code: string; // REQUIRED - GHN WardCode
   street_address: string; // REQUIRED
   is_default?: boolean; // default: false
 }
 
 export interface UpdateUserAddressInput {
-  full_name?: string;
-  phone?: string;
   province?: string;
   district?: string;
   ward?: string;
+  province_code?: number;
+  district_code?: number;
+  ward_code?: string;
   street_address?: string;
   is_default?: boolean;
 }

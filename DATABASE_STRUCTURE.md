@@ -13,7 +13,7 @@ Tài liệu này mô tả cấu trúc CSDL hiện tại (theo `database_schema.d
 - **Enum**:
   - `user_status`: `active | banned | deleted`
   - `verification_code_type`: `phone | verify_email | change_phone | password_reset | "2fa"`
-  - `notification_type`: `order_placed | order_shipped | order_delivered | order_cancelled | payment_success | payment_failed | review_request | promotion | system | support_ticket`
+  - `notification_type`: `order_placed | order_shipped | order_delivered | order_cancelled | payment_success | payment_failed | review_request`
 - **Tính năng nổi bật**:
   - Soft delete trên nhiều bảng (`deleted_at`).  
   - Full-text search với `tsvector` (`products.search_vector`) + GIN index.  
@@ -1032,9 +1032,6 @@ Database hệ thống bao gồm **23 bảng** chính, được tổ chức theo 
   - `payment_success`: Thanh toán thành công
   - `payment_failed`: Thanh toán thất bại
   - `review_request`: Yêu cầu đánh giá
-  - `promotion`: Khuyến mãi
-  - `system`: Thông báo hệ thống
-  - `support_ticket`: Ticket hỗ trợ
 - Quản lý trạng thái đã đọc/chưa đọc
 - Cung cấp link để điều hướng
 
@@ -1045,29 +1042,6 @@ Database hệ thống bao gồm **23 bảng** chính, được tổ chức theo 
 - `message`: Nội dung
 - `link`: Link điều hướng
 - `is_read`: Đã đọc chưa
-
----
-
-### 📋 Bảng `support_tickets`
-**Chức năng:** Quản lý ticket hỗ trợ khách hàng
-
-**Nhiệm vụ:**
-- Tạo số ticket duy nhất
-- Lưu chủ đề và mô tả vấn đề
-- Quản lý trạng thái: open, in_progress, resolved, closed
-- Phân loại độ ưu tiên: low, medium, high, urgent
-- Gán ticket cho nhân viên
-- Liên kết với đơn hàng nếu có
-
-**Các trường quan trọng:**
-- `ticket_number`: Số ticket (unique)
-- `user_id`: ID người tạo
-- `subject`: Chủ đề
-- `description`: Mô tả
-- `status`: Trạng thái
-- `priority`: Độ ưu tiên
-- `assigned_to`: Người được gán
-- `order_id`: ID đơn hàng (nếu liên quan)
 
 ---
 
@@ -1240,7 +1214,6 @@ Database được thiết kế để hỗ trợ đầy đủ các tính năng c�
 ✅ **Hoàn tiền:** Xử lý refund, return, exchange  
 ✅ **Quản lý kho:** Theo dõi tồn kho, cảnh báo, lịch sử  
 ✅ **Thông báo:** Real-time notifications  
-✅ **Hỗ trợ:** Ticket system  
 ✅ **Thống kê:** Dashboard, báo cáo  
 ✅ **Bảo mật:** Audit logs, verification codes  
 

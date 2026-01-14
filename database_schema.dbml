@@ -23,9 +23,6 @@ Enum notification_type {
   payment_success
   payment_failed
   review_request
-  promotion
-  system
-  support_ticket
 }
 
 Table users {

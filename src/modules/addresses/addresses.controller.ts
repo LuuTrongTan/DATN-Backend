@@ -14,7 +14,7 @@ export const getAddresses = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      `SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at 
+      `SELECT id, user_id, province, district, ward, province_code, district_code, ward_code, street_address, is_default, created_at, updated_at 
        FROM user_addresses 
        WHERE user_id = $1 AND deleted_at IS NULL
        ORDER BY is_default DESC, created_at DESC`,
@@ -41,7 +41,7 @@ export const getAddressById = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      `SELECT id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at 
+      `SELECT id, user_id, province, district, ward, province_code, district_code, ward_code, street_address, is_default, created_at, updated_at 
        FROM user_addresses 
        WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
       [id, userId]
@@ -80,16 +80,17 @@ export const createAddress = async (req: AuthRequest, res: Response) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO user_addresses (user_id, full_name, phone, province, district, ward, street_address, is_default)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at`,
+      `INSERT INTO user_addresses (user_id, province, district, ward, province_code, district_code, ward_code, street_address, is_default)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, user_id, province, district, ward, province_code, district_code, ward_code, street_address, is_default, created_at, updated_at`,
       [
         userId,
-        validated.full_name,
-        validated.phone,
         validated.province,
         validated.district,
         validated.ward,
+        validated.province_code,
+        validated.district_code,
+        validated.ward_code,
         validated.street_address,
         validated.is_default || false,
       ]
@@ -141,16 +142,6 @@ export const updateAddress = async (req: AuthRequest, res: Response) => {
     const values: any[] = [];
     let paramCount = 0;
 
-    if (validated.full_name !== undefined) {
-      paramCount++;
-      updates.push(`full_name = $${paramCount}`);
-      values.push(validated.full_name);
-    }
-    if (validated.phone !== undefined) {
-      paramCount++;
-      updates.push(`phone = $${paramCount}`);
-      values.push(validated.phone);
-    }
     if (validated.province !== undefined) {
       paramCount++;
       updates.push(`province = $${paramCount}`);
@@ -165,6 +156,21 @@ export const updateAddress = async (req: AuthRequest, res: Response) => {
       paramCount++;
       updates.push(`ward = $${paramCount}`);
       values.push(validated.ward);
+    }
+    if (validated.province_code !== undefined) {
+      paramCount++;
+      updates.push(`province_code = $${paramCount}`);
+      values.push(validated.province_code);
+    }
+    if (validated.district_code !== undefined) {
+      paramCount++;
+      updates.push(`district_code = $${paramCount}`);
+      values.push(validated.district_code);
+    }
+    if (validated.ward_code !== undefined) {
+      paramCount++;
+      updates.push(`ward_code = $${paramCount}`);
+      values.push(validated.ward_code);
     }
     if (validated.street_address !== undefined) {
       paramCount++;
@@ -192,7 +198,7 @@ export const updateAddress = async (req: AuthRequest, res: Response) => {
       `UPDATE user_addresses 
        SET ${updates.join(', ')} 
        WHERE id = $${paramCount - 1} AND user_id = $${paramCount}
-       RETURNING id, user_id, full_name, phone, province, district, ward, street_address, is_default, created_at, updated_at`,
+       RETURNING id, user_id, province, district, ward, province_code, district_code, ward_code, street_address, is_default, created_at, updated_at`,
       values
     );
 

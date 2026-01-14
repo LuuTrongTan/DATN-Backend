@@ -106,3 +106,5 @@ export const requireRole = (...roles: string[]) => {
   };
 };
 
+// Alias for requireRole to match existing usage
+export const authorize = requireRole;

@@ -10,9 +10,9 @@ import {
 import { getGHNProvinces, getGHNDistricts, getGHNWards } from '../provinces/ghn.service';
 
 export interface ShippingFeeRequest {
-  province: string | number; // Province name or ID
-  district: string | number; // District name or ID
-  ward?: string; // Ward code or name
+  province: string | number; // Province name or ID (khuyến nghị: GHN ProvinceID)
+  district: string | number; // District name or ID (khuyến nghị: GHN DistrictID)
+  ward?: string; // Ward code or name (khuyến nghị: GHN WardCode)
   weight: number; // in kg (will be converted to gram for GHN)
   value: number; // order value in VND
   from_province?: string | number; // Shop location province name or ID
@@ -35,7 +35,7 @@ const lookupLocationIds = async (
   district: string | number,
   ward?: string
 ): Promise<{ provinceId: number; districtId: number; wardCode: string }> => {
-  // If already IDs, return them
+  // Nếu đã truyền sẵn mã GHN (number cho province/district, ward là code) thì dùng luôn
   if (typeof province === 'number' && typeof district === 'number') {
     const wardCode = ward || '';
     return { provinceId: province, districtId: district, wardCode };
@@ -108,7 +108,7 @@ export const calculateShippingFee = async (request: ShippingFeeRequest): Promise
       to_district_id: toLocation.districtId,
       to_ward_code: toLocation.wardCode,
       weight: request.weight * 1000, // Convert kg to gram
-    value: request.value,
+      value: request.value,
       service_type_id: 2, // Standard service
   };
 

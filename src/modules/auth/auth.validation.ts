@@ -1,13 +1,11 @@
 import { z } from 'zod';
 
 // Validation schemas cho module Auth
-// UC-01: Đăng ký chỉ bằng số điện thoại
-// - Khi cấu hình yêu cầu Firebase: idToken sẽ được kiểm tra ở controller
-// - Khi tắt yêu cầu Firebase: idToken có thể bỏ qua
+// UC-01: Đăng ký chỉ bằng số điện thoại (bắt buộc Firebase ID token)
 export const registerSchema = z.object({
   phone: z.string().regex(/^\d{10}$/, 'Số điện thoại phải có 10 chữ số'),
   password: z.string().min(8, 'Mật khẩu phải có ít nhất 8 ký tự'),
-  idToken: z.string().optional(),
+  idToken: z.string().min(1, 'Firebase ID token là bắt buộc để xác thực số điện thoại'),
 });
 
 // Schema để thêm email recovery vào tài khoản

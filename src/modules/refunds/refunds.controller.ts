@@ -211,55 +211,66 @@ export const getRefunds = async (req: AuthRequest, res: Response) => {
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
     
-    let query = `
-      SELECT r.*,
-      o.order_number,
-      o.total_amount as order_total,
-      (SELECT json_agg(json_build_object(
-        'id', ri.id,
-        'order_item_id', ri.order_item_id,
-        'quantity', ri.quantity,
-        'refund_amount', ri.refund_amount,
-        'reason', ri.reason
-      )) FROM refund_items ri WHERE ri.refund_id = r.id) as items
+    // Base FROM/WHERE để tái sử dụng cho count & data
+    let baseQuery = `
       FROM refunds r
       INNER JOIN orders o ON r.order_id = o.id
       WHERE o.deleted_at IS NULL
     `;
-    
+
     const params: any[] = [];
     let paramCount = 0;
     
     // Customer chỉ thấy refunds của mình, admin/staff thấy tất cả
     if (userRole !== 'admin' && userRole !== 'staff') {
       paramCount++;
-      query += ` AND r.user_id = $${paramCount}`;
+      baseQuery += ` AND r.user_id = $${paramCount}`;
       params.push(userId);
     }
     
     if (status) {
       paramCount++;
-      query += ` AND r.status = $${paramCount}`;
+      baseQuery += ` AND r.status = $${paramCount}`;
       params.push(status);
     }
     
     if (type) {
       paramCount++;
-      query += ` AND r.type = $${paramCount}`;
+      baseQuery += ` AND r.type = $${paramCount}`;
       params.push(type);
     }
     
     // Count total
-    const countQuery = query.replace(/SELECT.*FROM/, 'SELECT COUNT(*) FROM');
+    const countQuery = `SELECT COUNT(*) ${baseQuery}`;
     const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].count);
-    
-    // Add pagination
-    query += ` ORDER BY r.created_at DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+    const total = parseInt(countResult.rows?.[0]?.count ?? '0');
+
+    // Query data with items subselect
+    const dataQuery = `
+      SELECT r.*,
+        o.order_number,
+        o.total_amount as order_total,
+        (
+          SELECT json_agg(
+            json_build_object(
+              'id', ri.id,
+              'order_item_id', ri.order_item_id,
+              'quantity', ri.quantity,
+              'refund_amount', ri.refund_amount,
+              'reason', ri.reason
+            )
+          )
+          FROM refund_items ri
+          WHERE ri.refund_id = r.id
+        ) as items
+      ${baseQuery}
+      ORDER BY r.created_at DESC
+      LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
+    `;
     params.push(limitNum);
     params.push((pageNum - 1) * limitNum);
     
-    const result = await pool.query(query, params);
+    const result = await pool.query(dataQuery, params);
     
     return ResponseHandler.success(res, {
       data: result.rows,
