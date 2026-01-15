@@ -12,8 +12,7 @@ export const migration: Migration = {
           'order_delivered',   -- Đơn hàng đã được giao
           'order_cancelled',   -- Đơn hàng bị hủy
           'payment_success',   -- Thanh toán thành công
-          'payment_failed',    -- Thanh toán thất bại
-          'review_request'     -- Yêu cầu đánh giá
+          'payment_failed'     -- Thanh toán thất bại
         );
       EXCEPTION
         WHEN duplicate_object THEN null;

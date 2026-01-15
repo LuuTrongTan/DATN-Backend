@@ -49,18 +49,13 @@ Mỗi model file chứa:
 - **Fields**: id, user_id, order_number, total_amount, shipping_address, payment_method, payment_status, order_status, shipping_fee, notes, created_at, updated_at
 - **Types**: 
   - `PaymentMethod = 'online' | 'cod'`
-  - `PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded'`
+      - `PaymentStatus = 'pending' | 'paid' | 'failed'`
   - `OrderStatus = 'pending' | 'confirmed' | 'processing' | 'shipping' | 'delivered' | 'cancelled'`
 
 ### 8. OrderItem Model (`order-item.model.ts`)
 - **Bảng**: `order_items`
 - **Migration**: `008_create_order_items_table`
 - **Fields**: id, order_id, product_id, variant_id, quantity, price, created_at
-
-### 9. Review Model (`review.model.ts`)
-- **Bảng**: `reviews`
-- **Migration**: `010_create_reviews_table`
-- **Fields**: id, user_id, product_id, order_id, rating, comment, image_urls, video_url, is_approved, created_at, updated_at
 
 ## Cách sử dụng
 

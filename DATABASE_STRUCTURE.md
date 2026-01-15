@@ -402,7 +402,7 @@ erDiagram
 
 ### 2.12. Bảng `payment_transactions`
 
-**Mục đích**: Lưu thông tin giao dịch thanh toán (VD: VNPAY).
+**Mục đích**: Lưu thông tin giao dịch thanh toán từ các cổng thanh toán online (VD: VNPay, ZaloPay,...).
 
 **Các cột chính**:
 

@@ -135,8 +135,7 @@ Backend/src/
 │   ├── auth/
 │   ├── cart/
 │   ├── orders/
-│   ├── products/
-│   └── reviews/
+│   └── products/
 ├── routes/              # Route definitions
 ├── utils/               # Utility functions
 ├── app.ts               # Express app setup
@@ -150,7 +149,6 @@ Xem các endpoints trong từng module:
 - `/api/products` - Products
 - `/api/cart` - Cart
 - `/api/orders` - Orders
-- `/api/reviews` - Reviews
 - `/api/admin` - Admin functions
 
 ## Health Check

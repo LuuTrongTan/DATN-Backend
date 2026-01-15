@@ -40,6 +40,21 @@ export async function ensureTagExists(name: string, slug?: string): Promise<numb
 
 // Helper: Đồng bộ tags cho sản phẩm
 export async function syncProductTags(productId: number, tagIds: number[]): Promise<void> {
+  // Validate input
+  if (!Number.isInteger(productId) || productId <= 0) {
+    throw new Error(`Invalid productId: ${productId}. Must be a positive integer.`);
+  }
+  
+  // Validate tagIds
+  const validTagIds = tagIds.filter(id => Number.isInteger(id) && id > 0);
+  if (tagIds.length > 0 && validTagIds.length !== tagIds.length) {
+    logger.warn('Some invalid tag IDs were filtered out', {
+      productId,
+      originalTagIds: tagIds,
+      validTagIds,
+    });
+  }
+  
   // Xóa tất cả relations cũ
   await pool.query(
     'DELETE FROM product_tag_relations WHERE product_id = $1',
@@ -47,9 +62,9 @@ export async function syncProductTags(productId: number, tagIds: number[]): Prom
   );
   
   // Thêm relations mới
-  if (tagIds.length > 0) {
-    const values = tagIds.map((_, index) => `($1, $${index + 2})`).join(', ');
-    const params = [productId, ...tagIds];
+  if (validTagIds.length > 0) {
+    const values = validTagIds.map((_, index) => `($1, $${index + 2})`).join(', ');
+    const params = [productId, ...validTagIds];
     await pool.query(
       `INSERT INTO product_tag_relations (product_id, tag_id) VALUES ${values}`,
       params

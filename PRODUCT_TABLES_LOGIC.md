@@ -9,7 +9,6 @@ Hệ thống quản lý sản phẩm sử dụng nhiều bảng liên kết vớ
 - Tags
 - Tồn kho (stock)
 - Đơn hàng và giỏ hàng
-- Đánh giá
 
 ---
 
@@ -234,40 +233,7 @@ CREATE TABLE order_items (
 
 ---
 
-## 7. Bảng `reviews` - Đánh Giá
-
-### Cấu Trúc
-```sql
-CREATE TABLE reviews (
-  id SERIAL PRIMARY KEY,
-  user_id UUID REFERENCES users(id),
-  product_id INTEGER REFERENCES products(id),
-  order_id INTEGER REFERENCES orders(id),              -- Phải mua mới được review
-  rating INTEGER,                                       -- 1-5 sao
-  comment TEXT,
-  image_urls VARCHAR[],                                 -- Array ảnh đánh giá
-  video_url VARCHAR(500),
-  reply TEXT,                                           -- Phản hồi từ admin/seller
-  replied_at TIMESTAMP,
-  replied_by UUID REFERENCES users(id),
-  helpful_count INTEGER DEFAULT 0,
-  is_approved BOOLEAN DEFAULT TRUE,                    -- Admin duyệt
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP
-)
-```
-
-### Logic Quan Trọng
-
-1. **Order Required**: Phải có `order_id` (đã mua) mới được review
-2. **Image URLs**: Array PostgreSQL, lưu nhiều ảnh
-3. **Approval**: Admin có thể duyệt/ẩn review
-4. **Soft Delete**: Sử dụng `deleted_at`
-
----
-
-## 8. Bảng `wishlist` - Yêu Thích
+## 7. Bảng `wishlist` - Yêu Thích
 
 ### Cấu Trúc
 ```sql
@@ -295,7 +261,6 @@ products (1) ──< (N) product_media
 products (1) ──< (N) product_tag_relations ──> (N) product_tags
 products (1) ──< (N) cart_items
 products (1) ──< (N) order_items
-products (1) ──< (N) reviews
 products (1) ──< (N) wishlist
 
 product_variants (1) ──< (N) cart_items

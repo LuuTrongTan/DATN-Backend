@@ -131,7 +131,7 @@ export const searchProducts = async (req: AuthRequest, res: Response) => {
 // Get all products
 export const getProducts = async (req: AuthRequest, res: Response) => {
   try {
-    const { page = 1, limit = 20, category_id, category_slug, search } = req.query;
+    const { page = 1, limit = 20, category_id, category_slug, search, min_price, max_price, tag_ids } = req.query;
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
     const userId = req.user?.id || null;
@@ -184,6 +184,35 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
       filterParams.push(`%${search}%`);
     }
 
+    // Handle price range filter
+    if (min_price) {
+      filterParamCount++;
+      whereClause += ` AND p.price >= $${filterParamCount}`;
+      filterParams.push(min_price);
+    }
+
+    if (max_price) {
+      filterParamCount++;
+      whereClause += ` AND p.price <= $${filterParamCount}`;
+      filterParams.push(max_price);
+    }
+
+    // Handle tag filter
+    if (tag_ids) {
+      const tagIds = Array.isArray(tag_ids) 
+        ? tag_ids.map(id => parseInt(id as string))
+        : [parseInt(tag_ids as string)];
+      
+      if (tagIds.length > 0 && tagIds.every(id => !isNaN(id))) {
+        filterParamCount++;
+        whereClause += ` AND EXISTS (
+          SELECT 1 FROM product_tag_relations ptr 
+          WHERE ptr.product_id = p.id AND ptr.tag_id = ANY($${filterParamCount}::int[])
+        )`;
+        filterParams.push(tagIds);
+      }
+    }
+
     // Build params for main query (includes userId, limit, offset)
     const queryParams = [...filterParams, userId, limitNum, (pageNum - 1) * limitNum];
     const userIdParamIndex = filterParamCount + 1;
@@ -207,6 +236,11 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
                WHERE pm.product_id = p.id AND pm.type = 'video'
                ORDER BY pm.display_order, pm.id
                LIMIT 1) AS video_url,
+              -- Tags của sản phẩm
+              (SELECT json_agg(json_build_object('id', pt.id, 'name', pt.name, 'slug', pt.slug))
+               FROM product_tags pt
+               INNER JOIN product_tag_relations ptr ON pt.id = ptr.tag_id
+               WHERE ptr.product_id = p.id) AS tags,
               CASE WHEN $${userIdParamIndex}::uuid IS NULL THEN false
                    ELSE EXISTS (
                      SELECT 1 FROM wishlist w
@@ -477,7 +511,25 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 
     // Xử lý tags nếu có
     if (body.tag_ids && Array.isArray(body.tag_ids) && body.tag_ids.length > 0) {
-      await syncProductTags(product.id, body.tag_ids);
+      // Validate và filter tag_ids để chỉ giữ lại số nguyên hợp lệ
+      const validTagIds = body.tag_ids
+        .map((id: unknown) => {
+          // Chuyển đổi sang số nếu là string
+          const numId = typeof id === 'string' ? parseInt(id, 10) : id;
+          // Kiểm tra là số nguyên hợp lệ và dương
+          return typeof numId === 'number' && !isNaN(numId) && numId > 0 ? numId : null;
+        })
+        .filter((id: number | null): id is number => id !== null);
+      
+      if (validTagIds.length > 0) {
+        await syncProductTags(product.id, validTagIds);
+      } else if (body.tag_ids.length > 0) {
+        // Nếu có tag_ids nhưng không có giá trị hợp lệ nào
+        logger.warn('Invalid tag_ids provided', {
+          productId: product.id,
+          tag_ids: body.tag_ids,
+        });
+      }
     } else if (body.tag_names && Array.isArray(body.tag_names) && body.tag_names.length > 0) {
       // Nếu gửi tag_names thay vì tag_ids, tạo tags mới hoặc lấy tags đã có
       const tagIds: number[] = [];
@@ -663,7 +715,28 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
     // Xử lý tags nếu có
     if (updates.tag_ids !== undefined) {
       if (Array.isArray(updates.tag_ids) && updates.tag_ids.length > 0) {
-        await syncProductTags(Number(id), updates.tag_ids);
+        // Validate và filter tag_ids để chỉ giữ lại số nguyên hợp lệ
+        const validTagIds = updates.tag_ids
+          .map((id: unknown) => {
+            // Chuyển đổi sang số nếu là string
+            const numId = typeof id === 'string' ? parseInt(id, 10) : id;
+            // Kiểm tra là số nguyên hợp lệ và dương
+            return typeof numId === 'number' && !isNaN(numId) && numId > 0 ? numId : null;
+          })
+          .filter((id: number | null): id is number => id !== null);
+        
+        if (validTagIds.length > 0) {
+          await syncProductTags(Number(id), validTagIds);
+        } else if (updates.tag_ids.length > 0) {
+          // Nếu có tag_ids nhưng không có giá trị hợp lệ nào
+          logger.warn('Invalid tag_ids provided in update', {
+            productId: id,
+            tag_ids: updates.tag_ids,
+          });
+        } else {
+          // Xóa tất cả tags nếu tag_ids là mảng rỗng
+          await syncProductTags(Number(id), []);
+        }
       } else {
         // Xóa tất cả tags nếu tag_ids là mảng rỗng
         await syncProductTags(Number(id), []);

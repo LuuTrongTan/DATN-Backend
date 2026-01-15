@@ -39,16 +39,29 @@ export interface GHNResponse<T> {
 
 // GHN API Types
 export interface GHNCalculateFeeRequest {
-  from_district_id: number;
-  from_ward_code: string;
-  to_district_id: number;
-  to_ward_code: string;
-  weight: number; // in gram
-  value: number; // order value in VND
-  service_type_id?: number; // Service type ID (default: 2 - Standard)
-  service_id?: number; // Service ID
-  insurance_value?: number; // Insurance value
-  cod_amount?: number; // COD amount
+  from_district_id?: number; // Optional - will use ShopId if not provided
+  from_ward_code?: string; // Optional - will use ShopId if not provided
+  to_district_id: number; // Required
+  to_ward_code: string; // Required
+  weight: number; // in gram (required for Hàng nhẹ)
+  service_type_id?: number; // Service type ID: 2 = Hàng nhẹ, 5 = Hàng nặng
+  service_id?: number; // Service ID (dùng để tính leadtime chính xác)
+  insurance_value?: number; // Insurance value (default: 0)
+  cod_value?: number; // COD amount (default: 0) - NOTE: API uses cod_value, not cod_amount
+  // Hàng nhẹ (service_type_id = 2): dùng length, width, height, weight ở root
+  length?: number; // Length in cm (for Hàng nhẹ)
+  width?: number; // Width in cm (for Hàng nhẹ)
+  height?: number; // Height in cm (for Hàng nhẹ)
+  // Hàng nặng (service_type_id = 5): BẮT BUỘC phải có items[]
+  items?: Array<{
+    name: string; // Required
+    code?: string; // Optional
+    quantity: number; // Required
+    length: number; // Required (in cm)
+    width: number; // Required (in cm)
+    height: number; // Required (in cm)
+    weight: number; // Required (in gram)
+  }>;
 }
 
 export interface GHNCalculateFeeResponse {
@@ -70,12 +83,23 @@ export interface GHNCalculateFeeResponse {
 }
 
 export interface GHNCreateOrderRequest {
-  to_name: string;
-  to_phone: string;
-  to_address: string;
-  to_ward_code: string;
-  to_district_id: number;
-  to_province_id: number;
+  to_name: string; // Bắt buộc
+  to_phone: string; // Bắt buộc
+  to_address: string; // Bắt buộc
+  to_ward_name: string; // Bắt buộc - Tên phường/xã
+  to_district_name: string; // Bắt buộc - Tên quận/huyện
+  to_province_name: string; // Bắt buộc - Tên tỉnh/thành phố
+  to_ward_code?: string; // Optional - Mã phường/xã (có thể dùng thay cho to_ward_name)
+  to_district_id?: number; // Optional - ID quận/huyện (có thể dùng thay cho to_district_name)
+  to_province_id?: number; // Optional - ID tỉnh/thành phố (có thể dùng thay cho to_province_name)
+  from_name?: string; // Optional - Nếu không truyền thì lấy từ ShopID
+  from_phone?: string; // Optional - Nếu không truyền thì lấy từ ShopID
+  from_address?: string; // Optional - Nếu không truyền thì lấy từ ShopID
+  from_ward_name?: string; // Optional - Nếu không truyền thì lấy từ ShopID
+  from_district_name?: string; // Optional - Nếu không truyền thì lấy từ ShopID
+  from_province_name?: string; // Optional - Nếu không truyền thì lấy từ ShopID
+  from_district_id?: number; // Optional - ID quận/huyện kho lấy hàng
+  from_ward_code?: string; // Optional - Mã phường/xã kho lấy hàng
   return_name?: string;
   return_phone?: string;
   return_address?: string;
@@ -169,7 +193,7 @@ export interface GHNTrackingResponse {
  */
 export const calculateGHNFee = async (
   request: GHNCalculateFeeRequest
-): Promise<{ fee: number; estimated_days: number; service_type: string; provider: string }> => {
+): Promise<{ fee: number; estimated_days: number; estimated_hours?: number; estimated_minutes?: number; service_type: string; provider: string }> => {
   const config = getGHNConfig();
 
   if (!config.token || !config.shopId) {
@@ -177,7 +201,139 @@ export const calculateGHNFee = async (
     return calculateFallbackFee(request);
   }
 
+  // Log request details for debugging
+  logger.info('GHN API Request - Calculate Fee', {
+    url: `${config.apiUrl}/shipping-order/fee`,
+    shopId: config.shopId,
+    hasToken: !!config.token,
+    tokenPrefix: config.token ? config.token.substring(0, 8) + '...' : 'N/A',
+    from_district: request.from_district_id,
+    to_district: request.to_district_id,
+  });
+
   try {
+    // Validate required fields according to GHN API documentation
+    if (!request.to_district_id || !request.to_ward_code || !request.weight) {
+      logger.error('GHN API - Missing required fields', {
+        has_to_district_id: !!request.to_district_id,
+        has_to_ward_code: !!request.to_ward_code,
+        has_weight: !!request.weight,
+      });
+      return calculateFallbackFee(request);
+    }
+
+    // CHỈ CẦN service_type_id, KHÔNG CẦN service_id
+    // NOTE: Luôn sử dụng Hàng nhẹ (service_type_id = 2) cho tất cả sản phẩm
+    const serviceTypeId = request.service_type_id || 2; // ALWAYS 2 (Hàng nhẹ) - Hardcoded default
+
+    // Build request body according to GHN API spec: https://api.ghn.vn/home/docs/detail?id=95
+    // Hàng nhẹ (service_type_id = 2): dùng length, width, height, weight ở root
+    // Hàng nặng (service_type_id = 5): BẮT BUỘC phải có items[] array
+    const requestBody: any = {
+      to_district_id: request.to_district_id, // Required
+      to_ward_code: request.to_ward_code, // Required
+      service_type_id: serviceTypeId,
+    };
+
+    // Xử lý theo loại dịch vụ
+    if (serviceTypeId === 2) {
+      // Hàng nhẹ: dùng length, width, height, weight ở root level
+      requestBody.weight = request.weight; // Required (in gram)
+      
+      if (request.length) {
+        requestBody.length = request.length;
+      }
+      if (request.width) {
+        requestBody.width = request.width;
+      }
+      if (request.height) {
+        requestBody.height = request.height;
+      }
+    } else if (serviceTypeId === 5) {
+      // Hàng nặng: BẮT BUỘC phải có items[] array
+      // Nếu không có items từ request, tạo items từ kích thước và weight
+      if (request.items && request.items.length > 0) {
+        requestBody.items = request.items;
+      } else {
+        // Tạo item từ kích thước và weight từ request (nếu có)
+        // Nếu không có kích thước, dùng giá trị mặc định cho 1 bộ quần áo
+        // Kích thước đóng gói 1 bộ quần áo: 35x25x8cm, trọng lượng: 0.3-0.5kg
+        const itemLength = request.length ? Math.round(request.length) : 35; // Default 35cm (cho 1 bộ quần áo)
+        const itemWidth = request.width ? Math.round(request.width) : 25;   // Default 25cm (cho 1 bộ quần áo)
+        const itemHeight = request.height ? Math.round(request.height) : 8; // Default 8cm (cho 1 bộ quần áo)
+        
+        requestBody.items = [{
+          name: 'Hàng hóa',
+          quantity: 1,
+          length: itemLength,
+          width: itemWidth,
+          height: itemHeight,
+          weight: request.weight, // Weight in gram
+        }];
+        logger.info('Created items array for Hàng nặng', {
+          items_count: requestBody.items.length,
+          total_weight: request.weight,
+          length: itemLength,
+          width: itemWidth,
+          height: itemHeight,
+          using_defaults: !request.length && !request.width && !request.height,
+        });
+      }
+      // Hàng nặng vẫn cần weight ở root (tổng weight)
+      requestBody.weight = request.weight;
+    }
+
+    // Optional fields - only include if provided
+    // NOTE: Theo yêu cầu, KHÔNG gửi from_district_id và from_ward_code lên GHN nữa
+    // if (request.from_district_id) {
+    //   requestBody.from_district_id = request.from_district_id;
+    // }
+    // if (request.from_ward_code && request.from_ward_code.trim() !== '') {
+    //   requestBody.from_ward_code = request.from_ward_code;
+    // }
+    if (request.insurance_value !== undefined && request.insurance_value !== null) {
+      requestBody.insurance_value = request.insurance_value;
+    } else if (request.insurance_value === undefined) {
+      // Default insurance_value is 0 according to API docs
+      requestBody.insurance_value = 0;
+    }
+    if (request.cod_value !== undefined && request.cod_value !== null) {
+      requestBody.cod_value = request.cod_value; // NOTE: API uses cod_value, not cod_amount
+    } else if (request.cod_value === undefined) {
+      // Default cod_value is 0 according to API docs
+      requestBody.cod_value = 0;
+    }
+
+    // Log the payload being sent to GHN API - formatted for Postman testing
+    const fullToken = config.token || '';
+    const fullHeaders = {
+      'Content-Type': 'application/json',
+      'Token': fullToken,
+      'ShopId': String(config.shopId),
+    };
+    
+    console.log('\n========== GHN API REQUEST - COPY TO POSTMAN ==========');
+    console.log('URL:', `${config.apiUrl}/shipping-order/fee`);
+    console.log('\nMethod: POST');
+    console.log('\nHeaders:');
+    console.log(JSON.stringify(fullHeaders, null, 2));
+    console.log('\nBody (JSON):');
+    console.log(JSON.stringify(requestBody, null, 2));
+    console.log('\n--- cURL Command ---');
+    console.log(`curl --location '${config.apiUrl}/shipping-order/fee' \\`);
+    console.log(`  --header 'Content-Type: application/json' \\`);
+    console.log(`  --header 'Token: ${fullToken}' \\`);
+    console.log(`  --header 'ShopId: ${config.shopId}' \\`);
+    console.log(`  --data '${JSON.stringify(requestBody)}'`);
+    console.log('=======================================================\n');
+    
+    // Also log to file logger
+    logger.info('GHN API Request Payload', {
+      url: `${config.apiUrl}/shipping-order/fee`,
+      headers: fullHeaders,
+      body: requestBody,
+    });
+
     const response = await fetch(`${config.apiUrl}/shipping-order/fee`, {
       method: 'POST',
       headers: {
@@ -185,30 +341,41 @@ export const calculateGHNFee = async (
         'Token': config.token,
         'ShopId': String(config.shopId),
       },
-      body: JSON.stringify({
-        from_district_id: request.from_district_id,
-        from_ward_code: request.from_ward_code,
-        to_district_id: request.to_district_id,
-        to_ward_code: request.to_ward_code,
-        weight: request.weight,
-        value: request.value,
-        service_type_id: request.service_type_id || 2, // Standard service
-        service_id: request.service_id,
-        insurance_value: request.insurance_value || request.value,
-        cod_amount: request.cod_amount || 0,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
+    // Log response status
+    console.log('\n========== GHN API RESPONSE ==========');
+    console.log('Status:', response.status, response.statusText);
+    
+    const responseText = await response.text();
+    console.log('\nResponse Body:');
+    console.log(responseText);
+    console.log('======================================\n');
+    
     if (!response.ok) {
-      const errorText = await response.text();
       logger.error('GHN API error - Calculate Fee', {
         status: response.status,
-        error: errorText,
+        error: responseText,
       });
       return calculateFallbackFee(request);
     }
 
-    const result = await response.json() as { code: number; message: string; data: GHNCalculateFeeResponse };
+    const result = JSON.parse(responseText) as { code: number; message: string; data: GHNCalculateFeeResponse };
+    
+    // Log parsed response
+    console.log('\n========== GHN API RESPONSE PARSED ==========');
+    console.log('Code:', result.code);
+    console.log('Message:', result.message);
+    console.log('\nData:');
+    console.log(JSON.stringify(result.data, null, 2));
+    console.log('=============================================\n');
+    
+    logger.info('GHN API Response', {
+      code: result.code,
+      message: result.message,
+      data: result.data,
+    });
 
     if (result.code !== 200) {
       logger.error('GHN API error - Calculate Fee', {
@@ -218,13 +385,160 @@ export const calculateGHNFee = async (
       return calculateFallbackFee(request);
     }
 
-    // Calculate estimated days (GHN doesn't provide this directly, estimate based on distance)
-    const isSameDistrict = request.from_district_id === request.to_district_id;
-    const estimatedDays = isSameDistrict ? 1 : 3;
+    // BƯỚC 3: Tính thời gian dự kiến từ GHN API /leadtime
+    let estimatedDays = 3; // Default fallback
+    let hours = 0; // Default
+    let minutes = 0; // Default
+    try {
+      // Gọi API leadtime để lấy thời gian dự kiến chính xác từ GHN
+      if (request.from_district_id && request.from_ward_code && request.to_district_id && request.to_ward_code) {
+        const leadtimeResult = await calculateGHNLeadtime({
+          from_district_id: request.from_district_id,
+          from_ward_code: request.from_ward_code,
+          to_district_id: request.to_district_id,
+          to_ward_code: request.to_ward_code,
+          service_id: request.service_id,
+          service_type_id: request.service_type_id,
+        });
+        
+        // Chuẩn hóa leadtime: Theo tài liệu GHN API (https://api.ghn.vn/home/docs/detail?id=104)
+        // leadtime là Unix timestamp (seconds) - thời gian giao hàng dự kiến
+        // order_date là Unix timestamp (seconds) - ngày tạo đơn hàng
+        const rawLeadtime = leadtimeResult.leadtime;
+        const rawOrderDate = leadtimeResult.order_date;
+        let normalizedDays = 3; // Default
+        // hours và minutes đã được khai báo ở đầu function
+        
+        // Theo tài liệu GHN: leadtime là timestamp (Unix timestamp tính bằng giây)
+        // Ví dụ: leadtime: 1593187200
+        if (rawLeadtime && rawLeadtime > 1000000000) {
+          // leadtime là timestamp (seconds) - thời gian giao hàng dự kiến
+          const now = Math.floor(Date.now() / 1000); // Current timestamp in seconds
+          const deliveryTimestamp = rawLeadtime; // Thời gian giao hàng dự kiến
+          const secondsDiff = deliveryTimestamp - now; // Chênh lệch thời gian (seconds)
+          
+          // Tính số ngày, giờ, phút từ hiện tại đến thời gian giao dự kiến
+          if (secondsDiff > 0) {
+            // Thời gian giao trong tương lai
+            const totalDays = secondsDiff / (24 * 60 * 60);
+            normalizedDays = Math.floor(totalDays);
+            const remainingSeconds = secondsDiff % (24 * 60 * 60); // Phần dư sau khi trừ số ngày
+            hours = Math.floor(remainingSeconds / (60 * 60));
+            const remainingSecondsAfterHours = remainingSeconds % (60 * 60);
+            minutes = Math.floor(remainingSecondsAfterHours / 60);
+            
+            // Validate: nếu số ngày quá lớn (> 30) hoặc quá nhỏ (< 0), có thể là timestamp sai
+            if (normalizedDays > 30) {
+              logger.warn('Leadtime timestamp seems too far in future, using fallback', {
+                raw_leadtime: rawLeadtime,
+                calculated_days: normalizedDays,
+                calculated_hours: hours,
+                calculated_minutes: minutes,
+                now_timestamp: now,
+                delivery_timestamp: deliveryTimestamp,
+                seconds_diff: secondsDiff,
+              });
+              // Fallback: tính dựa trên khoảng cách
+              const isSameDistrict = request.from_district_id === request.to_district_id;
+              normalizedDays = isSameDistrict ? 1 : 3;
+              hours = 0;
+              minutes = 0;
+            } else if (normalizedDays < 0) {
+              // Thời gian giao đã qua (có thể do timezone hoặc lỗi)
+              logger.warn('Leadtime timestamp is in the past, using fallback', {
+                raw_leadtime: rawLeadtime,
+                calculated_days: normalizedDays,
+                now_timestamp: now,
+                delivery_timestamp: deliveryTimestamp,
+              });
+              const isSameDistrict = request.from_district_id === request.to_district_id;
+              normalizedDays = isSameDistrict ? 1 : 3;
+              hours = 0;
+              minutes = 0;
+            }
+          } else {
+            // Thời gian giao đã qua hoặc bằng hiện tại
+            logger.warn('Leadtime timestamp is not in future, using fallback', {
+              raw_leadtime: rawLeadtime,
+              seconds_diff: secondsDiff,
+              now_timestamp: now,
+              delivery_timestamp: deliveryTimestamp,
+            });
+            const isSameDistrict = request.from_district_id === request.to_district_id;
+            normalizedDays = isSameDistrict ? 1 : 3;
+            hours = 0;
+            minutes = 0;
+          }
+        } else {
+          // Giá trị không hợp lệ (không phải timestamp), dùng fallback
+          logger.warn('Leadtime value is not a valid timestamp, using fallback', {
+            raw_leadtime: rawLeadtime,
+          });
+          const isSameDistrict = request.from_district_id === request.to_district_id;
+          normalizedDays = isSameDistrict ? 1 : 3;
+          hours = 0;
+          minutes = 0;
+        }
+        
+        estimatedDays = normalizedDays;
+        
+        // Format ngày tháng từ timestamp để hiển thị
+        const deliveryDate = rawLeadtime ? new Date(Number(rawLeadtime) * 1000).toISOString() : null;
+        const orderDateFormatted = rawOrderDate ? new Date(Number(rawOrderDate) * 1000).toISOString() : null;
+        
+        logger.info('GHN Leadtime calculated and normalized', {
+          raw_leadtime: rawLeadtime,
+          raw_order_date: rawOrderDate,
+          delivery_date_formatted: deliveryDate,
+          order_date_formatted: orderDateFormatted,
+          estimated_days: estimatedDays,
+          estimated_hours: hours,
+          estimated_minutes: minutes,
+          service_id: request.service_id,
+          service_type_id: request.service_type_id,
+        });
+        
+        console.log('\n========== GHN API - LEADTIME RESULT (NORMALIZED) ==========');
+        console.log('Raw Leadtime (timestamp):', rawLeadtime);
+        console.log('Delivery Date (formatted):', deliveryDate);
+        console.log('Raw Order Date (timestamp):', rawOrderDate);
+        console.log('Order Date (formatted):', orderDateFormatted);
+        console.log('\nEstimated Delivery Time:');
+        console.log('  - Days:', estimatedDays);
+        console.log('  - Hours:', hours);
+        console.log('  - Minutes:', minutes);
+        console.log('  - Total:', `${estimatedDays} ngày ${hours} giờ ${minutes} phút`);
+        console.log('==============================================================\n');
+      } else {
+        logger.warn('Cannot calculate leadtime - missing location info, using fallback', {
+          has_from_district: !!request.from_district_id,
+          has_from_ward: !!request.from_ward_code,
+          has_to_district: !!request.to_district_id,
+          has_to_ward: !!request.to_ward_code,
+        });
+        // Fallback: tính dựa trên khoảng cách
+        const isSameDistrict = request.from_district_id === request.to_district_id;
+        estimatedDays = isSameDistrict ? 1 : 3;
+        hours = 0;
+        minutes = 0;
+      }
+    } catch (leadtimeError: any) {
+      logger.warn('Failed to calculate leadtime from GHN API, using fallback', {
+        error: leadtimeError.message,
+        stack: leadtimeError.stack,
+      });
+      // Fallback: tính dựa trên khoảng cách
+      const isSameDistrict = request.from_district_id === request.to_district_id;
+      estimatedDays = isSameDistrict ? 1 : 3;
+      hours = 0;
+      minutes = 0;
+    }
 
     return {
       fee: result.data.total,
       estimated_days: estimatedDays,
+      estimated_hours: hours,
+      estimated_minutes: minutes,
       service_type: 'standard',
       provider: 'GHN',
     };
@@ -254,6 +568,113 @@ export const createGHNOrder = async (
   }
 
   try {
+    // NOTE: Hardcode địa chỉ để test (luôn ghi đè from_* và to_* theo yêu cầu)
+    const HARD_CODED_CONTACT = {
+      address: '72 Thành Thái, Phường 14, Quận 10, Hồ Chí Minh, Vietnam',
+      ward_name: 'Phường 14',
+      district_name: 'Quận 10',
+      province_name: 'HCM',
+    } as const;
+
+    // Build request body theo tài liệu GHN API
+    // Các trường bắt buộc: to_name, to_phone, to_address, to_ward_name, to_district_name, to_province_name, service_type_id, payment_type_id, required_note
+    const requestBody: any = {
+      // Bắt buộc - Thông tin người nhận
+      to_name: request.to_name,
+      to_phone: request.to_phone,
+      to_address: HARD_CODED_CONTACT.address,
+      to_ward_name: HARD_CODED_CONTACT.ward_name, // Bắt buộc - Tên phường/xã
+      to_district_name: HARD_CODED_CONTACT.district_name, // Bắt buộc - Tên quận/huyện
+      to_province_name: HARD_CODED_CONTACT.province_name, // Bắt buộc - Tên tỉnh/thành phố
+      // Thông tin người gửi (from) - Luôn dùng giá trị mặc định, không lấy từ request
+      from_name: request.from_name || request.to_name,
+      from_phone: request.from_phone || request.to_phone,
+      from_address: HARD_CODED_CONTACT.address,
+      from_ward_name: HARD_CODED_CONTACT.ward_name,
+      from_district_name: HARD_CODED_CONTACT.district_name,
+      from_province_name: HARD_CODED_CONTACT.province_name,
+      // Thông tin trả hàng (return) - Luôn dùng giá trị mặc định, không lấy từ request
+      return_phone: '0332190158',
+      return_address: '39 NTT',
+      return_district_id: null,
+      return_ward_code: '',
+      client_order_code: request.client_order_code,
+      cod_amount: request.cod_amount || 0,
+      content: request.content,
+      weight: request.weight,
+      length: request.length || 20,
+      width: request.width || 20,
+      height: request.height || 20,
+      pick_station_id: request.pick_station_id,
+      deliver_station_id: request.deliver_station_id,
+      insurance_value: request.insurance_value || request.cod_amount || 0,
+      service_type_id: request.service_type_id || 2,
+      service_id: request.service_id,
+      payment_type_id: request.payment_type_id || 2, // Buyer pay
+      note: request.note,
+      required_note: request.required_note || 'CHOTHUHANG',
+      items: request.items,
+    };
+
+    // Log request để import vào Postman
+    console.log('\n========== GHN API - CREATE ORDER REQUEST ==========');
+    console.log('URL:', `${config.apiUrl}/shipping-order/create`);
+    console.log('Method: POST');
+    console.log('\nHeaders:');
+    console.log(JSON.stringify({
+      'Content-Type': 'application/json',
+      'Token': config.token ? `${config.token.substring(0, 8)}...` : 'NOT_SET',
+      'ShopId': String(config.shopId),
+    }, null, 2));
+    console.log('\nRequest Body:');
+    console.log(JSON.stringify(requestBody, null, 2));
+    console.log('\n--- cURL Command (Full Token) ---');
+    console.log(`curl --location '${config.apiUrl}/shipping-order/create' \\`);
+    console.log(`  --header 'Content-Type: application/json' \\`);
+    console.log(`  --header 'Token: ${config.token}' \\`);
+    console.log(`  --header 'ShopId: ${config.shopId}' \\`);
+    console.log(`  --data '${JSON.stringify(requestBody)}'`);
+    console.log('\n--- Postman Collection JSON (Import vào Postman) ---');
+    const postmanCollection = {
+      info: {
+        name: 'GHN API',
+        schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+      },
+      item: [
+        {
+          name: 'Create Order',
+          request: {
+            method: 'POST',
+            header: [
+              { key: 'Content-Type', value: 'application/json', type: 'text' },
+              { key: 'Token', value: config.token, type: 'text' },
+              { key: 'ShopId', value: String(config.shopId), type: 'text' },
+            ],
+            body: {
+              mode: 'raw',
+              raw: JSON.stringify(requestBody, null, 2),
+              options: {
+                raw: {
+                  language: 'json',
+                },
+              },
+            },
+            url: {
+              raw: `${config.apiUrl}/shipping-order/create`,
+              protocol: config.apiUrl.startsWith('https') ? 'https' : 'http',
+              host: config.apiUrl.replace(/^https?:\/\//, '').split('/').filter(Boolean),
+            },
+          },
+        },
+      ],
+    };
+    console.log(JSON.stringify(postmanCollection, null, 2));
+    console.log('\n--- Hướng dẫn import vào Postman ---');
+    console.log('1. Copy toàn bộ JSON từ "Postman Collection JSON" ở trên');
+    console.log('2. Trong Postman: File > Import > Raw text');
+    console.log('3. Paste JSON và click Import');
+    console.log('=====================================================\n');
+
     const response = await fetch(`${config.apiUrl}/shipping-order/create`, {
       method: 'POST',
       headers: {
@@ -261,36 +682,7 @@ export const createGHNOrder = async (
         'Token': config.token,
         'ShopId': String(config.shopId),
       },
-      body: JSON.stringify({
-        to_name: request.to_name,
-        to_phone: request.to_phone,
-        to_address: request.to_address,
-        to_ward_code: request.to_ward_code,
-        to_district_id: request.to_district_id,
-        to_province_id: request.to_province_id,
-        return_name: request.return_name,
-        return_phone: request.return_phone,
-        return_address: request.return_address,
-        return_ward_code: request.return_ward_code,
-        return_district_id: request.return_district_id,
-        return_province_id: request.return_province_id,
-        client_order_code: request.client_order_code,
-        cod_amount: request.cod_amount || 0,
-        content: request.content,
-        weight: request.weight,
-        length: request.length || 20,
-        width: request.width || 20,
-        height: request.height || 20,
-        pick_station_id: request.pick_station_id,
-        deliver_station_id: request.deliver_station_id,
-        insurance_value: request.insurance_value || request.cod_amount || 0,
-        service_type_id: request.service_type_id || 2,
-        service_id: request.service_id,
-        payment_type_id: request.payment_type_id || 2, // Buyer pay
-        note: request.note,
-        required_note: request.required_note || 'CHOTHUHANG',
-        items: request.items,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
@@ -441,8 +833,8 @@ export interface GHNLeadtimeRequest {
 }
 
 export interface GHNLeadtimeResponse {
-  leadtime: number; // Days
-  order_date: string;
+  leadtime: number; // Timestamp (seconds) hoặc số ngày - cần chuẩn hóa
+  order_date?: string; // Ngày đặt hàng
 }
 
 // GHN Cancel Order Types
@@ -521,6 +913,18 @@ export const getGHNServices = async (
       throw new Error(`GHN API error: ${result.message}`);
     }
 
+    // Log raw response for debugging
+    logger.info('GHN Get Services Response', {
+      code: result.code,
+      message: result.message,
+      services_count: result.data?.length || 0,
+      services: result.data?.map(s => ({
+        service_id: s.service_id,
+        service_type_id: s.service_type_id,
+        short_name: s.short_name,
+      })),
+    });
+
     return result.data || [];
   } catch (error: any) {
     logger.error('Error calling GHN API - Get Services', {
@@ -571,7 +975,14 @@ export const calculateGHNLeadtime = async (
       throw new Error(`GHN API error: ${response.status} - ${errorText}`);
     }
 
-    const result = await response.json() as GHNResponse<GHNLeadtimeResponse>;
+    const responseText = await response.text();
+    
+    console.log('\n========== GHN API - LEADTIME RAW RESPONSE ==========');
+    console.log('Status:', response.status, response.statusText);
+    console.log('Response Body:', responseText);
+    console.log('====================================================\n');
+    
+    const result = JSON.parse(responseText) as GHNResponse<GHNLeadtimeResponse>;
 
     if (result.code !== 200) {
       logger.error('GHN API error - Calculate Leadtime', {
@@ -580,6 +991,21 @@ export const calculateGHNLeadtime = async (
       });
       throw new Error(`GHN API error: ${result.message}`);
     }
+
+    // Log parsed response
+    console.log('\n========== GHN API - LEADTIME PARSED ==========');
+    console.log('Code:', result.code);
+    console.log('Message:', result.message);
+    console.log('\nData:');
+    console.log(JSON.stringify(result.data, null, 2));
+    console.log('==============================================\n');
+
+    logger.info('GHN Leadtime API Response', {
+      code: result.code,
+      message: result.message,
+      raw_leadtime: result.data?.leadtime,
+      order_date: result.data?.order_date,
+    });
 
     return result.data;
   } catch (error: any) {
@@ -858,7 +1284,7 @@ export const updateGHNOrder = async (
 /**
  * Fallback fee calculation when API is not available
  */
-function calculateFallbackFee(request: GHNCalculateFeeRequest): { fee: number; estimated_days: number; service_type: string; provider: string } {
+function calculateFallbackFee(request: GHNCalculateFeeRequest): { fee: number; estimated_days: number; estimated_hours?: number; estimated_minutes?: number; service_type: string; provider: string } {
   const baseFee = 30000;
   const weightFee = (request.weight / 1000) * 5000; // Convert gram to kg
   
@@ -878,6 +1304,8 @@ function calculateFallbackFee(request: GHNCalculateFeeRequest): { fee: number; e
   return {
     fee,
     estimated_days: estimatedDays,
+    estimated_hours: 0,
+    estimated_minutes: 0,
     service_type: 'standard',
     provider: 'GHN (fallback)',
   };

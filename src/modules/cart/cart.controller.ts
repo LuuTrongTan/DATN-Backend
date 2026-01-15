@@ -17,7 +17,7 @@ export const addToCart = async (req: AuthRequest, res: Response) => {
     }
     const validated = cartItemSchema.parse(req.body);
     product_id = validated.product_id;
-    variant_id = validated.variant_id;
+    variant_id = validated.variant_id ?? undefined;
     quantity = validated.quantity;
 
     // Check product stock (with soft delete + active check)

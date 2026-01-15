@@ -6,8 +6,7 @@ export type NotificationType =
   | 'order_delivered'
   | 'order_cancelled'
   | 'payment_success'
-  | 'payment_failed'
-  | 'review_request';
+  | 'payment_failed';
 
 export interface Notification {
   id: number;

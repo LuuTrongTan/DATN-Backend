@@ -26,7 +26,7 @@ export const calculateFee = async (req: AuthRequest, res: Response) => {
   const province = req.body.province;
   const district = req.body.district;
   try {
-    const { weight, value, ward } = req.body;
+    const { weight, value, ward, length, width, height } = req.body;
 
     if (!province || !district) {
       return ResponseHandler.error(res, 'Tỉnh/thành phố và quận/huyện là bắt buộc', 400);
@@ -36,8 +36,11 @@ export const calculateFee = async (req: AuthRequest, res: Response) => {
       province,
       district,
       ward,
-      weight: weight || 1, // Default 1kg
+      weight: weight || 0.5, // Default 0.5kg (cho 1 bộ quần áo)
       value: value || 0,
+      length: length ? parseFloat(String(length)) : undefined,
+      width: width ? parseFloat(String(width)) : undefined,
+      height: height ? parseFloat(String(height)) : undefined,
     });
 
     return ResponseHandler.success(res, result, 'Tính phí vận chuyển thành công');

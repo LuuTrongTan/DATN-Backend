@@ -32,8 +32,7 @@
 - ✅ **price**: Lưu ý là `integer` (VND) trong database, không phải DECIMAL
 
 ### 8. Review Model (`review.model.ts`)
-- ✅ **user_id**: Đổi từ `number` → `string` (UUID)
-- ✅ Thêm các trường: `reply`, `replied_at`, `replied_by` (UUID), `helpful_count`, `deleted_at`
+- ĐÃ LOẠI BỎ HOÀN TOÀN KHỎI HỆ THỐNG THEO PHẠM VI ĐỒ ÁN (không còn bảng, model, controller, route liên quan)
 
 ### 9. UserAddress Model (`user-address.model.ts`)
 - ✅ **user_id**: Đổi từ `number` → `string` (UUID)
@@ -49,9 +48,7 @@
 - ✅ **created_at**: Đổi từ `string` → `Date`
 
 ### 12. Refund Model (`refund.model.ts`)
-- ✅ **user_id**: Đổi từ `number` → `string` (UUID)
-- ✅ **processed_by**: Đổi từ `number | null` → `string | null` (UUID)
-- ✅ Thêm trường: `refund_number` (unique, required)
+- ĐÃ LOẠI BỎ HOÀN TOÀN KHỎI HỆ THỐNG THEO PHẠM VI ĐỒ ÁN (không còn bảng, model, controller, route liên quan)
 
 ### 13. OrderStatusHistory Model (`order-status-history.model.ts`)
 - ✅ **updated_by**: Đổi từ `number | null` → `string | null` (UUID)
@@ -116,11 +113,11 @@
 5. `Backend/src/connections/db/models/product-variant.model.ts`
 6. `Backend/src/connections/db/models/cart-item.model.ts`
 7. `Backend/src/connections/db/models/order-item.model.ts`
-8. `Backend/src/connections/db/models/review.model.ts`
+8. (đã loại bỏ) `Backend/src/connections/db/models/review.model.ts`
 9. `Backend/src/connections/db/models/user-address.model.ts`
 10. `Backend/src/connections/db/models/verification-code.model.ts`
 11. `Backend/src/connections/db/models/stock-history.model.ts`
-12. `Backend/src/connections/db/models/refund.model.ts`
+12. (đã loại bỏ) `Backend/src/connections/db/models/refund.model.ts`
 13. `Backend/src/connections/db/models/order-status-history.model.ts`
 14. `Backend/src/connections/db/models/shipping.model.ts`
 15. `Backend/src/connections/db/models/wishlist.model.ts`

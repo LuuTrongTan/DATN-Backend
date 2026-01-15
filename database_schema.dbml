@@ -22,7 +22,6 @@ Enum notification_type {
   order_cancelled
   payment_success
   payment_failed
-  review_request
 }
 
 Table users {
@@ -284,69 +283,6 @@ Table payment_transactions {
     status [name: 'idx_payment_transactions_status']
     payment_gateway [name: 'idx_payment_transactions_gateway']
     created_at [name: 'idx_payment_transactions_created_at']
-  }
-}
-
-Table reviews {
-  id integer [pk]
-  user_id uuid [ref: > users.id, note: 'ON DELETE SET NULL']
-  product_id integer [ref: > products.id]
-  order_id integer [ref: > orders.id]
-  rating integer [note: 'CHECK 1..5']
-  comment text
-  image_urls text[]
-  video_url varchar(500)
-  reply text
-  replied_at timestamp
-  replied_by uuid [ref: > users.id, note: 'ON DELETE SET NULL']
-  helpful_count integer [default: 0]
-  is_approved boolean [default: true]
-  created_at timestamp [default: `CURRENT_TIMESTAMP`]
-  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
-  deleted_at timestamp
-
-  indexes {
-    product_id [name: 'idx_reviews_product']
-    rating [name: 'idx_reviews_rating']
-    created_at [name: 'idx_reviews_created_at']
-    (product_id, rating) [name: 'idx_reviews_product_rating']
-    (user_id, product_id, order_id) [name: 'reviews_unique_user_product_order', unique]
-  }
-}
-
-Table refunds {
-  id integer [pk]
-  refund_number varchar(50) [unique, not null]
-  order_id integer [ref: > orders.id, note: 'ON DELETE CASCADE']
-  user_id uuid [ref: > users.id, note: 'ON DELETE CASCADE']
-  type varchar(20) [not null, note: 'refund|return|exchange']
-  reason text [not null]
-  status varchar(20) [default: 'pending', note: 'pending|approved|rejected|processing|completed|cancelled']
-  refund_amount decimal(10, 2)
-  admin_notes text
-  processed_by uuid [ref: > users.id]
-  processed_at timestamp
-  created_at timestamp [default: `CURRENT_TIMESTAMP`]
-  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
-
-  indexes {
-    order_id [name: 'idx_refunds_order']
-    user_id [name: 'idx_refunds_user']
-    status [name: 'idx_refunds_status']
-  }
-}
-
-Table refund_items {
-  id integer [pk]
-  refund_id integer [ref: > refunds.id, note: 'ON DELETE CASCADE']
-  order_item_id integer [ref: > order_items.id, note: 'ON DELETE CASCADE']
-  quantity integer [not null]
-  refund_amount decimal(10, 2) [not null]
-  reason text
-  created_at timestamp [default: `CURRENT_TIMESTAMP`]
-
-  indexes {
-    refund_id [name: 'idx_refund_items_refund']
   }
 }
 

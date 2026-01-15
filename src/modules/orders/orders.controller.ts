@@ -321,39 +321,13 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
         });
       }
 
-      // Prepare response
+      // Prepare response (tạm thời không tạo URL thanh toán online, luồng VNPay đã gỡ bỏ)
       const responseData: any = {
         order: {
           ...order,
           items: orderItems,
         },
       };
-
-      // If online payment, create payment URL
-      if (validated.payment_method === 'online') {
-        try {
-          const { createPaymentUrl } = require('../payment/vnpay.service');
-          const paymentUrl = createPaymentUrl(
-            order.id,
-            order.order_number,
-            parseFloat(totalAmount.toString()),
-          `Thanh toan don hang ${order.order_number}`,
-          'other',
-          'vn',
-          req.ip || '127.0.0.1'
-        );
-
-          if (paymentUrl) {
-            responseData.payment_url = paymentUrl;
-          }
-        } catch (error) {
-          // VNPay not configured, continue without payment URL
-          logger.error('Error creating payment URL', error instanceof Error ? error : new Error(String(error)), {
-            orderId: order.id,
-            orderNumber: order.order_number,
-          });
-        }
-      }
 
       return ResponseHandler.created(res, responseData, 'Đặt hàng thành công');
     } catch (error: any) {
@@ -570,23 +544,7 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       };
     });
 
-    // Lấy refunds của order
-    const refundsResult = await pool.query(
-      `SELECT r.*,
-       (SELECT json_agg(json_build_object(
-         'id', ri.id,
-         'order_item_id', ri.order_item_id,
-         'quantity', ri.quantity,
-         'refund_amount', ri.refund_amount,
-         'reason', ri.reason
-       )) FROM refund_items ri WHERE ri.refund_id = r.id) as items
-       FROM refunds r
-       WHERE r.order_id = $1 AND r.deleted_at IS NULL
-       ORDER BY r.created_at DESC`,
-      [id]
-    );
-
-    // Kết hợp tất cả
+    // Kết hợp tất cả (không còn trả về refunds vì đã loại bỏ module refunds)
     const orderWithDetails = {
       ...order,
       ...(shipping && {
@@ -596,7 +554,6 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
         shipping_fee: shipping.shipping_fee ?? order.shipping_fee,
       }),
       items,
-      refunds: refundsResult.rows || [],
     };
 
     logger.info('Order fetched successfully', { orderId: id, itemsCount: items.length });
@@ -643,11 +600,10 @@ export const cancelOrder = async (req: AuthRequest, res: Response) => {
 
     const order = orderResult.rows[0];
 
-    // Chỉ cho hủy khi đơn chưa giao/hậu cần
-    const notCancellableStatuses = [ORDER_STATUS.SHIPPING, ORDER_STATUS.DELIVERED, ORDER_STATUS.CANCELLED];
-    if (notCancellableStatuses.includes(order.order_status)) {
+    // Chỉ cho hủy khi đơn ở trạng thái chờ xác nhận (pending)
+    if (order.order_status !== ORDER_STATUS.PENDING) {
       await client.query('ROLLBACK');
-      return ResponseHandler.error(res, 'Đơn hàng không thể hủy ở trạng thái hiện tại', 400);
+      return ResponseHandler.error(res, 'Chỉ có thể hủy đơn hàng khi đơn đang ở trạng thái chờ xác nhận', 400);
     }
 
     // Nếu đã thanh toán online (PAID), cần quy trình hoàn tiền riêng

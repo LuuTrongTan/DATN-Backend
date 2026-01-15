@@ -8,9 +8,9 @@ export const migration: Migration = {
         id SERIAL PRIMARY KEY,
         order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
         transaction_id VARCHAR(100) UNIQUE,
-        payment_gateway VARCHAR(50) NOT NULL, -- 'vnpay', 'momo', 'zalopay', etc.
+        payment_gateway VARCHAR(50) NOT NULL, -- 'vnpay', 'momo', etc.
         amount DECIMAL(10, 2) NOT NULL,
-        status VARCHAR(20) NOT NULL DEFAULT 'pending', -- 'pending', 'success', 'failed', 'cancelled', 'refunded'
+        status VARCHAR(20) NOT NULL DEFAULT 'pending', -- 'pending', 'success', 'failed', 'cancelled'
         response_data JSONB, -- Lưu response từ payment gateway
         error_message TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

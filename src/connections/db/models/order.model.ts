@@ -1,7 +1,7 @@
 // Order Model - Based on database_schema.dbml
 
 export type PaymentMethod = 'online' | 'cod';
-export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
+export type PaymentStatus = 'pending' | 'paid' | 'failed';
 export type OrderStatus = 'pending' | 'confirmed' | 'processing' | 'shipping' | 'delivered' | 'cancelled';
 
 export interface Order {

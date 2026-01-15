@@ -1,6 +1,6 @@
 import express from 'express';
 import { authenticate } from '../../middlewares/auth.middleware';
-import { getNotifications, markAsRead, markAllAsRead } from './notifications.controller';
+import { getNotifications, markAsRead, markAllAsRead, getUnreadCount } from './notifications.controller';
 
 const router = express.Router();
 
@@ -8,6 +8,7 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/', getNotifications);
+router.get('/unread-count', getUnreadCount);
 router.post('/read-all', markAllAsRead);
 router.post('/:id/read', markAsRead);
 

@@ -23,6 +23,7 @@ router.post('/products/:id/restore', requireRole('admin', 'staff'), adminControl
 
 // UC-21: Xử lý đơn hàng
 router.get('/orders', adminController.getAllOrders);
+router.get('/orders/:id', adminController.getOrderById);
 router.put('/orders/:id/status', adminController.updateOrderStatus);
 
 // UC-22: Tạo staff (admin only)
