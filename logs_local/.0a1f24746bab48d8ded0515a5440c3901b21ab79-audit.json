@@ -6,16 +6,6 @@
     "auditLog": "C:\\Users\\tan\\Desktop\\XgameProject\\DATN\\Backend\\logs_local\\.0a1f24746bab48d8ded0515a5440c3901b21ab79-audit.json",
     "files": [
         {
-            "date": 1765849075052,
-            "name": "C:\\Users\\tan\\Desktop\\XgameProject\\DATN\\Backend\\logs_local\\combined-2025-12-16.log",
-            "hash": "ce452fdfd0b533218419b44d634b269ad9536d3acef4382b8fe661d24492d377"
-        },
-        {
-            "date": 1765935054107,
-            "name": "C:\\Users\\tan\\Desktop\\XgameProject\\DATN\\Backend\\logs_local\\combined-2025-12-17.log",
-            "hash": "00afd6bf5e2e73ffbb7d5fd4cb1849209479f16cd28ea59924868078e2ec1316"
-        },
-        {
             "date": 1766112417142,
             "name": "C:\\Users\\tan\\Desktop\\XgameProject\\DATN\\Backend\\logs_local\\combined-2025-12-19.log",
             "hash": "71495aa99a2d6d515bbf8f5a1f9caa1db256556e2dafd934dd9031ae3825b625"
@@ -49,6 +39,11 @@
             "date": 1768440532915,
             "name": "C:\\Users\\tan\\Desktop\\XgameProject\\DATN\\Backend\\logs_local\\combined-2026-01-15.log",
             "hash": "eba1657605ad3745e71313cb0d89bddfbf5ca1f02f8f067612e514ba0d290d34"
+        },
+        {
+            "date": 1768548947753,
+            "name": "C:\\Users\\tan\\Desktop\\XgameProject\\DATN\\Backend\\logs_local\\combined-2026-01-16.log",
+            "hash": "31a29eb6bd3f1039742ace63719d6632560703b4dc4e2ad334b27a74c4da6386"
         }
     ],
     "hashType": "sha256"
