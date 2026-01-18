@@ -153,7 +153,7 @@ Table product_variants {
 Table product_media {
   id integer [pk]
   product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
-  variant_id integer [ref: > product_variants.id, note: 'ON DELETE CASCADE']
+  variant_id integer [ref: > product_variants.id, note: 'ON DELETE CASCADE, nullable - có thể null nếu media thuộc về sản phẩm chung']
   type varchar(20) [not null, default: 'image']
   image_url varchar(500) [not null]
   alt_text varchar(255)
@@ -238,12 +238,18 @@ Table order_items {
   product_id integer [ref: > products.id]
   variant_id integer [ref: > product_variants.id, note: 'nullable - có thể null nếu sản phẩm không có biến thể']
   quantity integer [not null]
-  price integer [not null, note: 'đơn giá VND']
+  price decimal(10, 2) [not null, note: 'đơn giá VND tại thời điểm đặt hàng']
+  product_name text [note: 'Snapshot tên sản phẩm tại thời điểm đặt hàng']
+  product_sku varchar(100) [note: 'Snapshot SKU sản phẩm tại thời điểm đặt hàng']
+  variant_sku varchar(100) [note: 'Snapshot SKU biến thể tại thời điểm đặt hàng']
+  variant_attributes_snapshot jsonb [note: 'Snapshot thuộc tính biến thể tại thời điểm đặt hàng']
   created_at timestamp [default: `CURRENT_TIMESTAMP`]
 
   indexes {
     order_id [name: 'idx_order_items_order']
     product_id [name: 'idx_order_items_product']
+    product_sku [name: 'idx_order_items_product_sku']
+    variant_sku [name: 'idx_order_items_variant_sku']
   }
 }
 
