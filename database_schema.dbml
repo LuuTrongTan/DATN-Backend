@@ -97,7 +97,7 @@ Table categories {
 Table products {
   id integer [pk]
   category_id integer [ref: > categories.id]
-  sku varchar(100) [unique]
+  sku varchar(100) [note: 'unique index với điều kiện WHERE sku IS NOT NULL AND deleted_at IS NULL']
   name varchar(255) [not null]
   description text
   price integer [not null]
@@ -107,7 +107,7 @@ Table products {
   sold_count integer [default: 0]
   is_active boolean [default: true]
   search_vector tsvector [note: 'auto-updated trigger']
-  embedding vector(1536) [note: 'requires pgvector extension']
+  embedding vector(1536) [note: 'requires pgvector extension, optional']
   created_at timestamp [default: `CURRENT_TIMESTAMP`]
   updated_at timestamp [default: `CURRENT_TIMESTAMP`]
   deleted_at timestamp
@@ -118,18 +118,18 @@ Table products {
     price [name: 'idx_products_price']
     created_at [name: 'idx_products_created_at']
     is_active [name: 'idx_products_active', note: 'partial WHERE is_active = true']
-    sku [name: 'idx_products_sku', note: 'partial WHERE sku IS NOT NULL']
+    sku [name: 'idx_products_sku', note: 'unique partial WHERE sku IS NOT NULL AND deleted_at IS NULL']
     search_vector [name: 'idx_products_search_vector', type: gin]
     (category_id, is_active) [name: 'idx_products_category_active', note: 'partial WHERE is_active = true']
     (price, category_id) [name: 'idx_products_price_range', note: 'partial WHERE is_active = true']
-    embedding [name: 'idx_products_embedding', note: 'HNSW if pgvector']
+    embedding [name: 'idx_products_embedding', note: 'HNSW if pgvector available']
   }
 }
 
 Table product_variants {
   id integer [pk]
   product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
-  sku varchar(100) [unique, note: 'SKU riêng cho từng biến thể, ví dụ: AO-THUN-001-M-DO']
+  sku varchar(100) [note: 'SKU riêng cho từng biến thể, ví dụ: AO-THUN-001-M-DO. Unique index với điều kiện WHERE sku IS NOT NULL AND deleted_at IS NULL']
   variant_attributes jsonb [not null, default: '{}', note: 'Kết hợp các thuộc tính dạng JSON: {"Size": "M", "Color": "Đỏ", "Material": "Cotton"}']
   price_adjustment integer [default: 0, note: 'Điều chỉnh giá so với giá gốc (VND), +50000 = tăng 50k, -30000 = giảm 30k']
   stock_quantity integer [default: 0, note: 'Số lượng tồn kho của biến thể này']
@@ -141,7 +141,7 @@ Table product_variants {
 
   indexes {
     product_id [name: 'idx_product_variants_product']
-    sku [name: 'idx_product_variants_sku']
+    sku [name: 'idx_product_variants_sku', note: 'unique partial WHERE sku IS NOT NULL AND deleted_at IS NULL']
     variant_attributes [name: 'idx_product_variants_attributes', note: 'GIN index cho JSONB']
     (is_active, deleted_at) [name: 'idx_product_variants_active']
     (product_id, is_active) [name: 'idx_product_variants_product_active', note: 'partial WHERE deleted_at IS NULL']
@@ -176,8 +176,8 @@ Table product_tags {
 }
 
 Table product_tag_relations {
-  product_id integer [ref: > products.id]
-  tag_id integer [ref: > product_tags.id]
+  product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
+  tag_id integer [ref: > product_tags.id, note: 'ON DELETE CASCADE']
   created_at timestamp [default: `CURRENT_TIMESTAMP`]
   indexes {
     (product_id, tag_id) [pk]
@@ -190,7 +190,7 @@ Table cart_items {
   id integer [pk]
   user_id uuid [ref: > users.id, note: 'ON DELETE CASCADE']
   product_id integer [ref: > products.id, note: 'ON DELETE CASCADE']
-  variant_id integer [ref: > product_variants.id]
+  variant_id integer [ref: > product_variants.id, note: 'nullable - có thể null nếu sản phẩm không có biến thể']
   quantity integer [not null, default: 1]
   created_at timestamp [default: `CURRENT_TIMESTAMP`]
   updated_at timestamp [default: `CURRENT_TIMESTAMP`]
@@ -236,7 +236,7 @@ Table order_items {
   id integer [pk]
   order_id integer [ref: > orders.id, note: 'ON DELETE CASCADE']
   product_id integer [ref: > products.id]
-  variant_id integer [ref: > product_variants.id]
+  variant_id integer [ref: > product_variants.id, note: 'nullable - có thể null nếu sản phẩm không có biến thể']
   quantity integer [not null]
   price integer [not null, note: 'đơn giá VND']
   created_at timestamp [default: `CURRENT_TIMESTAMP`]
@@ -289,11 +289,12 @@ Table payment_transactions {
 Table user_addresses {
   id integer [pk]
   user_id uuid [ref: > users.id, note: 'ON DELETE CASCADE']
-  full_name varchar(255) [not null]
-  phone varchar(10) [not null]
   province varchar(100) [not null]
   district varchar(100) [not null]
   ward varchar(100) [not null]
+  province_code integer [not null, note: 'GHN ProvinceID']
+  district_code integer [not null, note: 'GHN DistrictID']
+  ward_code varchar(50) [not null, note: 'GHN WardCode']
   street_address text [not null]
   is_default boolean [default: false]
   created_at timestamp [default: `CURRENT_TIMESTAMP`]
@@ -336,4 +337,19 @@ Table notifications {
     type [name: 'idx_notifications_type']
     is_read [name: 'idx_notifications_is_read']
   }
+}
+
+Table app_settings {
+  id integer [pk]
+  key text [unique, not null, note: 'Key của setting, ví dụ: auth.require_firebase_for_phone_registration']
+  value jsonb [not null, note: 'Giá trị dạng JSON, ví dụ: {"enabled": true}']
+  description text [note: 'Mô tả setting']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`, note: 'Auto-updated by trigger']
+
+  indexes {
+    key [name: 'idx_app_settings_key']
+  }
+  
+  Note: 'Bảng lưu các cấu hình toàn hệ thống (feature flags). Có trigger tự động cập nhật updated_at.'
 }

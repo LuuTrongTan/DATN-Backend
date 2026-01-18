@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../types/request.types';
 import { pool } from '../../connections';
-import { cartItemSchema } from './cart.validation';
+import { cartItemSchema, updateCartItemSchema } from './cart.validation';
 import { ResponseHandler } from '../../utils/response';
 import { logger } from '../../utils/logging';
 
@@ -213,20 +213,28 @@ export const removeFromCart = async (req: AuthRequest, res: Response) => {
 // UC-11: Sửa sản phẩm trong giỏ hàng
 export const updateCartItem = async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
-  const { quantity } = req.body;
   const userId = req.user?.id;
+  let quantity: number | undefined;
+  let variant_id: number | null | undefined;
+  
   try {
     if (!userId) {
       return ResponseHandler.error(res, 'Người dùng chưa đăng nhập', 401);
     }
 
-    if (!quantity || quantity < 1) {
-      return ResponseHandler.error(res, 'Số lượng phải lớn hơn 0', 400);
+    // Validate input
+    const validated = updateCartItemSchema.parse(req.body);
+    quantity = validated.quantity;
+    variant_id = validated.variant_id;
+
+    // Phải có ít nhất một trường để cập nhật
+    if (quantity === undefined && variant_id === undefined) {
+      return ResponseHandler.error(res, 'Phải cung cấp ít nhất một trường để cập nhật (quantity hoặc variant_id)', 400);
     }
 
     // Get cart item with product info (not deleted, active)
     const cartItem = await pool.query(
-      `SELECT ci.*, p.stock_quantity as product_stock, pv.stock_quantity as variant_stock
+      `SELECT ci.*, p.stock_quantity as product_stock, pv.stock_quantity as variant_stock, p.id as product_db_id
        FROM cart_items ci
        JOIN products p ON ci.product_id = p.id AND p.deleted_at IS NULL AND p.is_active = TRUE
        LEFT JOIN product_variants pv ON ci.variant_id = pv.id AND pv.deleted_at IS NULL AND pv.is_active = TRUE
@@ -239,26 +247,117 @@ export const updateCartItem = async (req: AuthRequest, res: Response) => {
     }
 
     const item = cartItem.rows[0];
-    const availableStock = item.variant_id ? item.variant_stock : item.product_stock;
+    const productId = item.product_id;
 
-    if (quantity > availableStock) {
+    // Nếu đang cập nhật variant_id, kiểm tra variant mới có tồn tại và thuộc về sản phẩm này không
+    if (variant_id !== undefined) {
+      if (variant_id !== null) {
+        const variantCheck = await pool.query(
+          `SELECT id, stock_quantity, product_id 
+           FROM product_variants 
+           WHERE id = $1 AND product_id = $2 AND deleted_at IS NULL AND is_active = TRUE`,
+          [variant_id, productId]
+        );
+
+        if (variantCheck.rows.length === 0) {
+          return ResponseHandler.error(res, 'Biến thể không tồn tại hoặc không thuộc về sản phẩm này', 400);
+        }
+      }
+    }
+
+    // Xác định variant_id và quantity cuối cùng
+    const finalVariantId = variant_id !== undefined ? variant_id : item.variant_id;
+    const finalQuantity = quantity !== undefined ? quantity : item.quantity;
+
+    // Kiểm tra stock dựa trên variant_id cuối cùng
+    let availableStock: number;
+    if (finalVariantId) {
+      const variantStock = await pool.query(
+        'SELECT stock_quantity FROM product_variants WHERE id = $1 AND deleted_at IS NULL AND is_active = TRUE',
+        [finalVariantId]
+      );
+      if (variantStock.rows.length === 0) {
+        return ResponseHandler.error(res, 'Biến thể không tồn tại hoặc đã bị xóa', 400);
+      }
+      availableStock = parseInt(variantStock.rows[0].stock_quantity);
+    } else {
+      availableStock = parseInt(item.product_stock);
+    }
+
+    if (finalQuantity > availableStock) {
       return ResponseHandler.error(res, 'Hàng tồn kho không đủ', 400, {
         code: 'INSUFFICIENT_STOCK',
-        details: { available: availableStock, requested: quantity },
+        details: { available: availableStock, requested: finalQuantity },
       });
     }
 
+    // Kiểm tra xem có cart item khác với cùng product_id và variant_id không (tránh trùng lặp)
+    if (variant_id !== undefined && finalVariantId !== item.variant_id) {
+      const existingItem = await pool.query(
+        'SELECT id FROM cart_items WHERE user_id = $1 AND product_id = $2 AND variant_id = $3 AND id != $4',
+        [userId, productId, finalVariantId || null, id]
+      );
+
+      if (existingItem.rows.length > 0) {
+        // Nếu đã có item với variant này, cộng dồn quantity vào item đó và xóa item hiện tại
+        const existingQuantity = await pool.query(
+          'SELECT quantity FROM cart_items WHERE id = $1',
+          [existingItem.rows[0].id]
+        );
+        const newQuantity = existingQuantity.rows[0].quantity + finalQuantity;
+        
+        if (newQuantity > availableStock) {
+          return ResponseHandler.error(res, 'Tổng số lượng vượt quá tồn kho', 400, {
+            code: 'INSUFFICIENT_STOCK',
+            details: { available: availableStock, requested: newQuantity },
+          });
+        }
+
+        await pool.query(
+          'UPDATE cart_items SET quantity = $1, updated_at = NOW() WHERE id = $2',
+          [newQuantity, existingItem.rows[0].id]
+        );
+        await pool.query('DELETE FROM cart_items WHERE id = $1', [id]);
+        
+        return ResponseHandler.success(res, null, 'Cập nhật giỏ hàng thành công');
+      }
+    }
+
+    // Cập nhật cart item
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
+    let paramIndex = 1;
+
+    if (quantity !== undefined) {
+      updateFields.push(`quantity = $${paramIndex}`);
+      updateValues.push(quantity);
+      paramIndex++;
+    }
+
+    if (variant_id !== undefined) {
+      updateFields.push(`variant_id = $${paramIndex}`);
+      updateValues.push(finalVariantId);
+      paramIndex++;
+    }
+
+    updateFields.push(`updated_at = NOW()`);
+    updateValues.push(id);
+
     await pool.query(
-      'UPDATE cart_items SET quantity = $1, updated_at = NOW() WHERE id = $2',
-      [quantity, id]
+      `UPDATE cart_items SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`,
+      updateValues
     );
 
     return ResponseHandler.success(res, null, 'Cập nhật giỏ hàng thành công');
   } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return ResponseHandler.validationError(res, error.errors);
+    }
     logger.error('Error updating cart item', error instanceof Error ? error : new Error(String(error)), {
       userId,
       cartItemId: id,
       quantity,
+      variantId: variant_id,
       ip: req.ip,
     });
     return ResponseHandler.internalError(res, 'Lỗi khi cập nhật giỏ hàng', error);
